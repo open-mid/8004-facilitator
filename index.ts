@@ -1,15 +1,23 @@
 import { config } from "dotenv";
-import express from "express";
+import express, { Request, Response } from "express";
+import { verify, settle } from "x402/facilitator";
+import {
+  PaymentRequirementsSchema,
+  type PaymentRequirements,
+  type PaymentPayload,
+  PaymentPayloadSchema,
+  createConnectedClient,
+  createSigner,
+} from "x402/types";
 import {
   createPublicClient,
   createWalletClient,
   http,
   parseAbi,
-  getAddress,
   encodeFunctionData,
   decodeEventLog,
 } from "viem";
-import { anvil, base, baseSepolia, sepolia, polygonAmoy, type Chain } from "viem/chains";
+import { anvil, base, baseSepolia, type Chain } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 
 config();
@@ -20,56 +28,33 @@ const RPC_URL = process.env.RPC_URL as string | undefined;
 const ERC8004_IDENTITY_REGISTRY_ADDRESS = process.env.ERC8004_IDENTITY_REGISTRY_ADDRESS as
   | `0x${string}`
   | undefined;
-const FACILITATOR_PRIVATE_KEY = process.env.FACILITATOR_PRIVATE_KEY as `0x${string}` | undefined;
+// Normalize private keys - add 0x prefix if missing
+let FACILITATOR_PRIVATE_KEY = process.env.FACILITATOR_PRIVATE_KEY;
+if (FACILITATOR_PRIVATE_KEY && !FACILITATOR_PRIVATE_KEY.startsWith("0x")) {
+  FACILITATOR_PRIVATE_KEY = "0x" + FACILITATOR_PRIVATE_KEY;
+}
+
+let EVM_PRIVATE_KEY = process.env.EVM_PRIVATE_KEY || "";
+if (EVM_PRIVATE_KEY && !EVM_PRIVATE_KEY.startsWith("0x")) {
+  EVM_PRIVATE_KEY = "0x" + EVM_PRIVATE_KEY;
+}
 
 // Request logging middleware (before JSON parsing to catch all requests)
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
-  console.log("Headers:", JSON.stringify(req.headers, null, 2));
   next();
 });
 
 // JSON parsing middleware with error handling
 app.use(express.json());
 
-// In-memory storage for payment status (in production, use a real database)
-const paymentStatuses = new Map<
-  string,
-  {
-    status: "pending" | "confirmed" | "failed";
-    txHash?: string;
-    error?: string;
-    agentAddress?: string; // payee (authorization.to)
-    payerAddress?: string; // payer (authorization.from)
-  }
->();
-
-// In-memory storage for registration status
-const registrationStatuses = new Map<
-  string,
-  {
-    status: "pending" | "confirmed" | "failed";
-    txHash?: string;
-    agentId?: string;
-    agentOwner?: string;
-    network?: string;
-    error?: string;
-  }
->();
-
 function isLocalRPC(rpcUrl?: string): boolean {
   if (!rpcUrl) return false;
   try {
     const url = new URL(rpcUrl);
-    return (
-      url.hostname === "localhost" ||
-      url.hostname === "127.0.0.1" ||
-      url.hostname === "0.0.0.0" ||
-      url.hostname === "::1"
-    );
+    return url.hostname === "localhost" || url.hostname === "127.0.0.1";
   } catch {
-    // If URL parsing fails, check if it contains localhost or 127.0.0.1
-    return rpcUrl.includes("localhost") || rpcUrl.includes("127.0.0.1");
+    return rpcUrl?.includes("localhost") || rpcUrl?.includes("127.0.0.1");
   }
 }
 
@@ -86,10 +71,6 @@ function mapX402NetworkToChain(network?: string, rpcUrl?: string): Chain | undef
       return baseSepolia;
     case "base":
       return base;
-    case "sepolia":
-      return sepolia;
-    case "polygon-amoy":
-      return polygonAmoy;
     default:
       return undefined;
   }
@@ -105,6 +86,8 @@ const identityRegistryAbi = parseAbi([
   "struct MetadataEntry { string key; bytes value; }",
 ]);
 
+const SUPPORTED_NETWORKS = ["base-sepolia", "base"];
+
 // GET /health - Health check endpoint
 app.get("/health", (req, res) => {
   console.log("Health check requested");
@@ -113,132 +96,88 @@ app.get("/health", (req, res) => {
 
 // GET /supported - Get supported payment kinds
 app.get("/supported", (req, res) => {
-  console.log("Supported payment kinds requested");
-  // Return dummy supported networks/schemes
   const response = {
     schemes: ["exact"],
-    networks: [
-      "base-sepolia",
-      "base",
-      "ethereum",
-      "optimism",
-      "sepolia",
-      "solana",
-      "solana-devnet",
-    ],
+    networks: SUPPORTED_NETWORKS,
   };
   console.log("Returning supported schemes:", response);
   res.json(response);
 });
 
-// POST /verify - Verify a payment payload
-app.post("/verify", (req, res) => {
-  console.log("=== /verify endpoint hit ===");
-  console.log("Request body keys:", Object.keys(req.body || {}));
-  console.log("Request body:", JSON.stringify(req.body, null, 2));
-
-  const { paymentPayload, paymentRequirements, x402Version } = req.body;
-
-  // Dummy facilitator - accept everything
-  // In a real implementation, you would:
-  // 1. Parse and validate the payment signature
-  // 2. Verify the signature against the payer's address
-  // 3. Check payment amount matches requirements
-  // 4. Validate network and chain ID
-  // 5. Verify nonce hasn't been reused
-
-  if (!paymentPayload) {
-    console.log("Verification failed: missing payment payload");
-    return res.status(400).json({
-      isValid: false,
-      invalidReason: "invalid_exact_evm_payload_signature",
-    });
-  }
-
-  // Extract addresses from the payment payload
-  const payer = paymentPayload.payload?.authorization?.from;
-  const agent = paymentPayload.payload?.authorization?.to;
-
-  // Generate a dummy payment ID for tracking
-  const paymentId = `pay_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-  // Store initial status (include addresses for later registration)
-  paymentStatuses.set(paymentId, {
-    status: "pending",
-    agentAddress: agent,
-    payerAddress: payer,
-  });
-
-  // In a real implementation, verify signature here
-  // const isValid = await verifyPaymentSignature(paymentPayload);
-
-  console.log("Verification successful, payment ID:", paymentId);
-
-  // Return response matching VerifyResponseSchema
+// GET /verify - Info endpoint
+app.get("/verify", (req: Request, res: Response) => {
   res.json({
-    isValid: true,
-    payer,
+    endpoint: "/verify",
+    description: "POST to verify x402 payments",
+    body: {
+      paymentPayload: "PaymentPayload",
+      paymentRequirements: "PaymentRequirements",
+    },
+  });
+});
+
+// POST /verify - Verify a payment payload
+app.post("/verify", async (req: Request, res: Response) => {
+  try {
+    const body: { paymentPayload: PaymentPayload; paymentRequirements: PaymentRequirements } =
+      req.body;
+    const paymentRequirements = PaymentRequirementsSchema.parse(body.paymentRequirements);
+    const paymentPayload = PaymentPayloadSchema.parse(body.paymentPayload);
+
+    if (!SUPPORTED_NETWORKS.includes(paymentRequirements.network)) {
+      throw new Error("Invalid network - only EVM networks are supported");
+    }
+
+    const client = createConnectedClient(paymentRequirements.network);
+    const valid = await verify(client, paymentPayload, paymentRequirements);
+
+    console.log("Verification result:", valid);
+    res.json(valid);
+  } catch (error) {
+    console.error("error", error);
+    res.status(400).json({ error: "Invalid request" });
+  }
+});
+
+// GET /settle - Info endpoint
+app.get("/settle", (req: Request, res: Response) => {
+  res.json({
+    endpoint: "/settle",
+    description: "POST to settle x402 payments",
+    body: {
+      paymentPayload: "PaymentPayload",
+      paymentRequirements: "PaymentRequirements",
+    },
   });
 });
 
 // POST /settle - Submit payment on-chain
-app.post("/settle", async (req, res) => {
-  const { paymentPayload, paymentRequirements, x402Version } = req.body;
+app.post("/settle", async (req: Request, res: Response) => {
+  try {
+    const body: { paymentPayload: PaymentPayload; paymentRequirements: PaymentRequirements } =
+      req.body;
+    const paymentRequirements = PaymentRequirementsSchema.parse(body.paymentRequirements);
+    const paymentPayload = PaymentPayloadSchema.parse(body.paymentPayload);
 
-  console.log("Settlement request received:", JSON.stringify(req.body, null, 2));
+    if (!SUPPORTED_NETWORKS.includes(paymentRequirements.network)) {
+      throw new Error("Invalid network - only EVM networks are supported");
+    }
 
-  if (!paymentPayload) {
-    console.log("Settlement failed: missing payment payload");
-    return res.status(400).json({
-      success: false,
-      errorReason: "invalid_exact_evm_payload_signature",
-    });
+    const signer = await createSigner(
+      paymentRequirements.network,
+      EVM_PRIVATE_KEY as `0x${string}`,
+    );
+    const response = await settle(signer, paymentPayload, paymentRequirements);
+
+    res.json(response);
+  } catch (error) {
+    console.error("error", error);
+    res.status(400).json({ error: `Invalid request: ${error}` });
   }
-
-  // Generate a dummy transaction hash
-  const transaction = `0x${Date.now().toString(16)}${Math.random().toString(16).substr(2, 56)}`;
-
-  // Extract network from payment payload
-  const network = paymentPayload.network;
-
-  // In a real implementation, you would:
-  // 1. Connect to the appropriate blockchain network
-  // 2. Build and sign the transaction
-  // 3. Submit the transaction to the network
-  // 4. Wait for confirmation
-  // 5. Return the transaction hash
-
-  console.log("Settlement successful, transaction hash:", transaction);
-
-  // Extract addresses from the payment payload
-  const payer = paymentPayload.payload?.authorization?.from;
-  const agent = paymentPayload.payload?.authorization?.to;
-
-  // Update payment status
-  const paymentId =
-    paymentPayload.payload?.authorization?.nonce ||
-    `pay_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  paymentStatuses.set(paymentId, {
-    status: "confirmed",
-    txHash: transaction,
-    agentAddress: agent,
-    payerAddress: payer,
-  });
-
-  // Return response matching SettleResponseSchema
-  res.json({
-    success: true,
-    transaction,
-    network,
-    payer,
-  });
 });
 
 // POST /register - Register agent with ERC-8004
 app.post("/register", async (req, res) => {
-  console.log("=== /register endpoint hit ===");
-  console.log("Request body:", JSON.stringify(req.body, null, 2));
-
   const { network, tokenURI, metadata, mode = "self" } = req.body;
 
   if (!network) {
@@ -265,14 +204,6 @@ app.post("/register", async (req, res) => {
       error: `Unsupported network: ${network}`,
     });
   }
-
-  const registrationId = `reg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-  // Store initial status
-  registrationStatuses.set(registrationId, {
-    status: "pending",
-    network,
-  });
 
   try {
     const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
@@ -311,11 +242,6 @@ app.post("/register", async (req, res) => {
         });
       }
 
-      registrationStatuses.set(registrationId, {
-        status: "confirmed",
-        network,
-      });
-
       return res.json({
         success: true,
         network,
@@ -337,7 +263,7 @@ app.post("/register", async (req, res) => {
 
     console.log("Registering agent with ERC-8004 (self mode)");
 
-    const account = privateKeyToAccount(FACILITATOR_PRIVATE_KEY);
+    const account = privateKeyToAccount(FACILITATOR_PRIVATE_KEY as `0x${string}`);
     const walletClient = createWalletClient({ account, chain, transport: http(RPC_URL) });
 
     // Check if facilitator already has agents registered (weak check)
@@ -389,11 +315,7 @@ app.post("/register", async (req, res) => {
       });
     }
 
-    console.log("ERC-8004: register tx submitted:", hash);
-
-    // Wait for transaction receipt and extract agentId from event
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
-    console.log("ERC-8004: register confirmed in block", receipt.blockNumber);
 
     // Extract agentId from Registered event
     const registeredEvent = receipt.logs.find(log => {
@@ -424,14 +346,6 @@ app.post("/register", async (req, res) => {
       }
     }
 
-    registrationStatuses.set(registrationId, {
-      status: "confirmed",
-      txHash: hash,
-      agentId,
-      agentOwner: facilitatorAddress,
-      network,
-    });
-
     res.json({
       success: true,
       network,
@@ -441,11 +355,6 @@ app.post("/register", async (req, res) => {
     });
   } catch (e: any) {
     console.error("ERC-8004: Registration failed:", e?.message || e);
-    registrationStatuses.set(registrationId, {
-      status: "failed",
-      network,
-      error: e?.message || String(e),
-    });
 
     res.status(500).json({
       success: false,
@@ -453,28 +362,6 @@ app.post("/register", async (req, res) => {
       network,
     });
   }
-});
-
-// GET /status/:paymentId - Get payment status
-app.get("/status/:paymentId", (req, res) => {
-  const { paymentId } = req.params;
-
-  console.log(`Status check requested for payment ID: ${paymentId}`);
-
-  const status = paymentStatuses.get(paymentId);
-
-  if (!status) {
-    console.log(`Payment not found: ${paymentId}`);
-    return res.status(404).json({
-      error: "Payment not found",
-    });
-  }
-
-  console.log(`Status for ${paymentId}:`, status);
-  res.json({
-    paymentId,
-    ...status,
-  });
 });
 
 // Catch-all for unsupported routes
@@ -495,12 +382,11 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Dummy x402 Facilitator running on http://localhost:${PORT}`);
+  console.log(`🚀 x402 ERC-8004 Facilitator running on http://localhost:${PORT}`);
   console.log(`Endpoints available:`);
   console.log(`  GET  /health`);
   console.log(`  GET  /supported`);
   console.log(`  POST /verify`);
   console.log(`  POST /settle`);
   console.log(`  POST /register`);
-  console.log(`  GET  /status/:paymentId`);
 });

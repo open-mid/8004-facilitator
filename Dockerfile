@@ -9,10 +9,10 @@ WORKDIR /app
 
 # Clone x402 repo and build it
 RUN git clone --depth 1 --branch v2-development https://github.com/coinbase/x402.git x402 && \
-    cd x402 && \
+    cd x402/typescript && \
     pnpm install && \
     pnpm build && \
-    cd ..
+    cd ../..
 
 # Copy facilitator repo files
 COPY package*.json ./

@@ -7,12 +7,16 @@ RUN npm install -g pnpm
 # Set working directory
 WORKDIR /app
 
-# Clone x402 repo and build it
+# Clone x402 repo and build only the packages we need
 RUN git clone --depth 1 --branch v2-development https://github.com/coinbase/x402.git x402 && \
     cd x402/typescript && \
     pnpm install && \
-    pnpm build && \
+    pnpm turbo run build --filter=@x402/core --filter=@x402/evm && \
     cd ../..
+
+
+# Create facilitator directory (so file:../x402 paths work correctly)
+WORKDIR /app/facilitator
 
 # Copy facilitator repo files
 COPY package*.json ./

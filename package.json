@@ -16,6 +16,7 @@
   "dependencies": {
     "@x402/core": "file:../x402/typescript/packages/core",
     "@x402/evm": "file:../x402/typescript/packages/mechanisms/evm",
+    "@x402/legacy": "file:../x402/typescript/packages/legacy",
     "dotenv": "^16.4.7",
     "express": "^4.18.2",
     "viem": "^2.21.29"

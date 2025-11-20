@@ -1,6 +1,14 @@
 import { config } from "dotenv";
 import express from "express";
 import { x402Facilitator } from "@x402/core/facilitator";
+// Import legacy verify/settle functions - using file path since @x402/legacy points to the legacy directory
+import { verify as legacyVerify, settle as legacySettle } from "@x402/legacy/x402/dist/cjs/verify";
+import type {
+  PaymentPayload as LegacyPaymentPayload,
+  PaymentRequirements as LegacyPaymentRequirements,
+  VerifyResponse as LegacyVerifyResponse,
+  SettleResponse as LegacySettleResponse,
+} from "@x402/legacy/x402/dist/cjs/types";
 import type {
   PaymentRequirements,
   PaymentPayload,
@@ -154,20 +162,20 @@ const evmSigner = toFacilitatorEvmSigner({
     viemClient.waitForTransactionReceipt(args),
 });
 
-// Store client address -> { agentId, feedbackAuth } mapping
+// Store client address -> { agentId, feedbackAuth } mapping (for v2)
 const feedbackAuthStore = new Map<string, { agentId: string; feedbackAuth: string }>();
+
+// Store agent address -> agentId mapping (for v1)
+const agentAddressStore = new Map<string, string>();
 
 function createPaymentHash(paymentPayload: PaymentPayload): string {
   return crypto.createHash("sha256").update(JSON.stringify(paymentPayload)).digest("hex");
 }
 
 type RegisterInfo = {
-  agentId?: string;
   tokenURI?: string;
   metadata?: { key: string; value: string }[];
   network?: string;
-  clientAddress?: string;
-  feedbackEnabled?: boolean;
 };
 
 type RegisterResult = {
@@ -176,19 +184,18 @@ type RegisterResult = {
   agentId?: string;
   agentOwner?: string;
   txHash?: string;
+  error?: string;
+};
+
+type GenerateFeedbackAuthResult = {
+  success: boolean;
+  agentId?: string;
   feedbackAuth?: string;
   error?: string;
 };
 
 const registerAgent = async (info: RegisterInfo): Promise<RegisterResult> => {
-  const {
-    network,
-    tokenURI,
-    metadata,
-    agentId: requestedAgentId,
-    clientAddress,
-    feedbackEnabled,
-  } = info;
+  const { network, tokenURI, metadata } = info;
 
   if (!network) {
     console.log("Registration failed: missing network");
@@ -219,9 +226,6 @@ const registerAgent = async (info: RegisterInfo): Promise<RegisterResult> => {
   try {
     const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
 
-    // Get the actual chain ID from the blockchain to ensure it matches
-    const actualChainId = await publicClient.getChainId();
-
     // Facilitator registers itself
     if (!FACILITATOR_PRIVATE_KEY) {
       console.log("Registration failed: FACILITATOR_PRIVATE_KEY required");
@@ -236,74 +240,6 @@ const registerAgent = async (info: RegisterInfo): Promise<RegisterResult> => {
     const account = privateKeyToAccount(FACILITATOR_PRIVATE_KEY as `0x${string}`);
     const walletClient = createWalletClient({ account, chain, transport: http(RPC_URL) });
     const facilitatorAddress = account.address;
-
-    // If agentId is provided, check if it exists and belongs to the facilitator
-    if (requestedAgentId) {
-      try {
-        const agentIdBigInt = BigInt(requestedAgentId);
-
-        // Check ownership - ownerOf will revert if agent doesn't exist
-        const owner = await publicClient.readContract({
-          address: ERC8004_IDENTITY_REGISTRY_ADDRESS,
-          abi: identityRegistryAbi,
-          functionName: "ownerOf",
-          args: [agentIdBigInt],
-        });
-
-        // If ownerOf succeeds, agent exists - verify ownership
-        if (owner.toLowerCase() === facilitatorAddress.toLowerCase()) {
-          console.log(
-            `ERC-8004: Agent ${requestedAgentId} already exists and belongs to facilitator`,
-          );
-
-          // Generate feedbackAuth if clientAddress is provided
-          let feedbackAuth: string | undefined;
-          if (clientAddress && FACILITATOR_PRIVATE_KEY && feedbackEnabled) {
-            try {
-              feedbackAuth = await generateFeedbackAuth(
-                requestedAgentId.toString(),
-                clientAddress as Address,
-                facilitatorAddress,
-                FACILITATOR_PRIVATE_KEY as `0x${string}`,
-                actualChainId,
-              );
-            } catch (err) {
-              console.error("ERC-8004: Failed to generate feedbackAuth:", err);
-            }
-          }
-
-          return {
-            success: true,
-            network,
-            agentOwner: facilitatorAddress,
-            agentId: requestedAgentId.toString(),
-            ...(feedbackAuth && { feedbackAuth }),
-          };
-        } else {
-          // Agent exists but belongs to different owner
-          console.log(
-            `ERC-8004: Agent ${requestedAgentId} exists but belongs to different owner: ${owner}`,
-          );
-          return {
-            success: false,
-            error: `Agent ${requestedAgentId} exists but belongs to different owner: ${owner}`,
-            network,
-          };
-        }
-      } catch (err) {
-        // If ownerOf reverts, the agent doesn't exist
-        // Don't proceed with registration if we can't verify
-        console.error(
-          "ERC-8004: Agent does not exist or error checking ownership, cannot proceed with registration",
-          err,
-        );
-        return {
-          success: false,
-          error: `Agent ${requestedAgentId} does not exist or failed to verify: ${err instanceof Error ? err.message : "Unknown error"}`,
-          network,
-        };
-      }
-    }
 
     let hash: `0x${string}`;
     let agentId: string | undefined;
@@ -370,31 +306,12 @@ const registerAgent = async (info: RegisterInfo): Promise<RegisterResult> => {
       }
     }
 
-    // Generate feedbackAuth if clientAddress is provided and agentId is available
-    let feedbackAuth: string | undefined;
-    if (clientAddress && agentId && FACILITATOR_PRIVATE_KEY) {
-      try {
-        // Get the actual chain ID from the blockchain to ensure it matches
-        const actualChainId = await publicClient.getChainId();
-        feedbackAuth = await generateFeedbackAuth(
-          agentId,
-          clientAddress as Address,
-          facilitatorAddress,
-          FACILITATOR_PRIVATE_KEY as `0x${string}`,
-          actualChainId,
-        );
-      } catch (err) {
-        console.error("ERC-8004: Failed to generate feedbackAuth:", err);
-      }
-    }
-
     return {
       success: true,
       network,
       txHash: hash,
       agentOwner: facilitatorAddress,
       agentId,
-      ...(feedbackAuth && { feedbackAuth }),
     };
   } catch (e: any) {
     console.error("ERC-8004: Registration failed:", e?.message || e);
@@ -407,52 +324,144 @@ const registerAgent = async (info: RegisterInfo): Promise<RegisterResult> => {
   }
 };
 
+const generateClientFeedbackAuth = async (
+  agentId: string,
+  clientAddress: Address,
+  network: string,
+): Promise<GenerateFeedbackAuthResult> => {
+  if (!RPC_URL || !ERC8004_IDENTITY_REGISTRY_ADDRESS) {
+    return {
+      success: false,
+      error: "Facilitator not configured for ERC-8004",
+    };
+  }
+
+  if (!FACILITATOR_PRIVATE_KEY) {
+    return {
+      success: false,
+      error: "Facilitator private key not configured",
+    };
+  }
+
+  const chain = mapX402NetworkToChain(network, RPC_URL);
+  if (!chain) {
+    return {
+      success: false,
+      error: `Unsupported network: ${network}`,
+    };
+  }
+
+  try {
+    const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
+    const account = privateKeyToAccount(FACILITATOR_PRIVATE_KEY as `0x${string}`);
+    const facilitatorAddress = account.address;
+
+    // Get the actual chain ID from the blockchain
+    const actualChainId = await publicClient.getChainId();
+
+    // Check if agent exists and belongs to facilitator
+    try {
+      const agentIdBigInt = BigInt(agentId);
+      const owner = await publicClient.readContract({
+        address: ERC8004_IDENTITY_REGISTRY_ADDRESS,
+        abi: identityRegistryAbi,
+        functionName: "ownerOf",
+        args: [agentIdBigInt],
+      });
+
+      // Verify ownership
+      if (owner.toLowerCase() !== facilitatorAddress.toLowerCase()) {
+        return {
+          success: false,
+          error: `Agent ${agentId} exists but belongs to different owner: ${owner}`,
+        };
+      }
+
+      // Agent exists and belongs to facilitator - generate feedbackAuth
+      console.log(
+        `ERC-8004: Agent ${agentId} exists and belongs to facilitator, generating feedbackAuth`,
+      );
+
+      const feedbackAuth = await generateFeedbackAuth(
+        agentId,
+        clientAddress,
+        facilitatorAddress,
+        FACILITATOR_PRIVATE_KEY as `0x${string}`,
+        actualChainId,
+      );
+
+      // Store feedbackAuth and agentId
+      feedbackAuthStore.set(clientAddress.toLowerCase(), {
+        agentId,
+        feedbackAuth,
+      });
+
+      console.log(
+        `📝 Stored feedbackAuth and agentId (${agentId}) for client address: ${clientAddress}`,
+      );
+
+      return {
+        success: true,
+        agentId,
+        feedbackAuth,
+      };
+    } catch (err) {
+      // If ownerOf reverts, agent doesn't exist
+      return {
+        success: false,
+        error: `Agent ${agentId} does not exist: ${err instanceof Error ? err.message : "Unknown error"}`,
+      };
+    }
+  } catch (e: any) {
+    console.error("ERC-8004: Failed to generate feedbackAuth:", e?.message || e);
+    return {
+      success: false,
+      error: e?.message || "Failed to generate feedbackAuth",
+    };
+  }
+};
+
 const facilitator = new x402Facilitator()
   .registerScheme("eip155:*", new ExactEvmFacilitator(evmSigner))
   .registerSchemeV1("base-sepolia" as `${string}:${string}`, new ExactEvmFacilitator(evmSigner))
   .onAfterSettle(async context => {
+    // This hook only handles v2 payments (v1 is handled directly in /settle endpoint)
     const paymentPayload = context.paymentPayload;
     const extensions = paymentPayload.extensions;
 
     // Extract register extension data
-    const registerInfo = extensions?.register as RegisterInfo | undefined;
-    console.log(registerInfo);
-    if (registerInfo) {
-      // Get network from payment requirements
-      const network = paymentPayload.accepted?.network || registerInfo.network;
-      // Get client address from payment payload (the payer)
-      const clientAddress = (paymentPayload.payload as any)?.authorization?.from;
+    const registerInfo = extensions?.register as
+      | { agentId?: string; feedbackEnabled?: boolean }
+      | undefined;
 
-      const result = await registerAgent({
-        ...registerInfo,
-        network: network || "base-sepolia", // fallback to base-sepolia
-        clientAddress,
-      });
+    // For v2, use agentId from registerInfo if feedbackEnabled is true
+    if (!registerInfo || !registerInfo.agentId || !registerInfo.feedbackEnabled) {
+      // No feedback enabled for v2, skip
+      return;
+    }
 
-      if (result.success) {
-        console.log(
-          `✅ Agent registered: ${result.agentId}`,
-          result.txHash ? `tx: ${result.txHash}` : "",
-        );
+    // Get client address from payment payload (the payer)
+    const clientAddress = (paymentPayload.payload as any)?.authorization?.from;
 
-        // Store feedbackAuth and agentId if feedbackEnabled is true and both are available
-        if (
-          registerInfo.feedbackEnabled &&
-          result.feedbackAuth &&
-          result.agentId &&
-          clientAddress
-        ) {
-          feedbackAuthStore.set(clientAddress.toLowerCase(), {
-            agentId: result.agentId,
-            feedbackAuth: result.feedbackAuth,
-          });
-          console.log(
-            `📝 Stored feedbackAuth and agentId (${result.agentId}) for client address: ${clientAddress}`,
-          );
-        }
-      } else {
-        console.error(`❌ Agent registration failed: ${result.error}`);
-      }
+    if (!clientAddress) {
+      console.warn("No client address found in payment payload, skipping feedbackAuth generation");
+      return;
+    }
+
+    // Get network from payment requirements
+    const network = paymentPayload.accepted?.network || "base-sepolia";
+
+    // Generate feedbackAuth for v2
+    const result = await generateClientFeedbackAuth(
+      registerInfo.agentId,
+      clientAddress as Address,
+      network,
+    );
+
+    if (result.success) {
+      console.log(`✅ Generated feedbackAuth for v2 agent ${result.agentId}`);
+    } else {
+      console.error(`❌ Failed to generate feedbackAuth for v2: ${result.error}`);
     }
   });
 
@@ -465,8 +474,8 @@ const facilitator = new x402Facilitator()
 app.post("/verify", async (req, res) => {
   try {
     const { paymentPayload, paymentRequirements } = req.body as {
-      paymentPayload: PaymentPayload;
-      paymentRequirements: PaymentRequirements;
+      paymentPayload: PaymentPayload | LegacyPaymentPayload;
+      paymentRequirements: PaymentRequirements | LegacyPaymentRequirements;
     };
 
     if (!paymentPayload || !paymentRequirements) {
@@ -475,12 +484,57 @@ app.post("/verify", async (req, res) => {
       });
     }
 
-    // Hooks will automatically:
-    // - Track verified payment (onAfterVerify)
-    // - Extract and catalog discovery info (onAfterVerify)
-    const response: VerifyResponse = await facilitator.verify(paymentPayload, paymentRequirements);
+    // Check x402Version to determine which verify function to use
+    const x402Version = (paymentPayload as any).x402Version;
 
-    res.json(response);
+    if (x402Version === 1) {
+      // Use legacy verify for v1
+      console.log("Using legacy verify for x402Version 1");
+
+      if (!RPC_URL) {
+        return res.status(500).json({
+          error: "RPC_URL not configured",
+        });
+      }
+
+      const legacyPayload = paymentPayload as LegacyPaymentPayload;
+      const legacyRequirements = paymentRequirements as LegacyPaymentRequirements;
+
+      // Get network from requirements (v1 format)
+      const network = legacyRequirements.network;
+      const chain = mapX402NetworkToChain(network, RPC_URL);
+
+      if (!chain) {
+        return res.status(400).json({
+          isValid: false,
+          invalidReason: "invalid_scheme" as any, // Type assertion needed due to strict error enum
+        } as LegacyVerifyResponse);
+      }
+
+      // Create public client for legacy verify
+      const publicClient = createPublicClient({
+        chain,
+        transport: http(RPC_URL),
+      });
+
+      const response: LegacyVerifyResponse = await legacyVerify(legacyPayload, legacyRequirements);
+
+      return res.json(response);
+    } else if (x402Version === 2) {
+      // Use current facilitator verify for v2
+      console.log("Using x402 v2 for x402Version 2");
+
+      const response: VerifyResponse = await facilitator.verify(
+        paymentPayload as PaymentPayload,
+        paymentRequirements as PaymentRequirements,
+      );
+
+      return res.json(response);
+    } else {
+      return res.status(400).json({
+        error: `Unsupported x402Version: ${x402Version}`,
+      });
+    }
   } catch (error) {
     console.error("Verify error:", error);
     res.status(500).json({
@@ -497,7 +551,10 @@ app.post("/verify", async (req, res) => {
  */
 app.post("/settle", async (req, res) => {
   try {
-    const { paymentPayload, paymentRequirements } = req.body;
+    const { paymentPayload, paymentRequirements } = req.body as {
+      paymentPayload: PaymentPayload | LegacyPaymentPayload;
+      paymentRequirements: PaymentRequirements | LegacyPaymentRequirements;
+    };
 
     if (!paymentPayload || !paymentRequirements) {
       return res.status(400).json({
@@ -505,20 +562,103 @@ app.post("/settle", async (req, res) => {
       });
     }
 
-    // Hooks will automatically:
-    // - Validate payment was verified (onBeforeSettle - will abort if not)
-    // - Check verification timeout (onBeforeSettle)
-    // - Clean up tracking (onAfterSettle / onSettleFailure)
-    const response: SettleResponse = await facilitator.settle(
-      paymentPayload as PaymentPayload,
-      paymentRequirements as PaymentRequirements,
-    );
+    // Check x402Version to determine which settle function to use
+    const x402Version = (paymentPayload as any).x402Version;
 
-    res.json(response);
+    if (x402Version === 1) {
+      // Use legacy settle for v1
+      console.log("Using legacy settle for x402Version 1");
+
+      if (!RPC_URL || !FACILITATOR_PRIVATE_KEY) {
+        return res.status(500).json({
+          success: false,
+          errorReason: "invalid_scheme" as any, // Type assertion needed due to strict error enum
+          network: (paymentRequirements as LegacyPaymentRequirements).network,
+          transaction: "",
+        } as LegacySettleResponse);
+      }
+
+      const legacyPayload = paymentPayload as LegacyPaymentPayload;
+      const legacyRequirements = paymentRequirements as LegacyPaymentRequirements;
+
+      // Get network from requirements (v1 format)
+      const network = legacyRequirements.network;
+      const chain = mapX402NetworkToChain(network, RPC_URL);
+
+      if (!chain) {
+        return res.status(400).json({
+          success: false,
+          errorReason: "invalid_scheme" as any, // Type assertion needed due to strict error enum
+          network,
+          transaction: "",
+        } as LegacySettleResponse);
+      }
+
+      const response: LegacySettleResponse = await legacySettle(legacyPayload, legacyRequirements);
+
+      // Generate feedbackAuth for v1 after successful settlement
+      if (response.success) {
+        // Get client address from v1 payment payload
+        const clientAddress = (legacyPayload.payload as any)?.authorization?.from;
+        const payTo = (legacyPayload.payload as any)?.authorization?.to;
+
+        if (clientAddress) {
+          // Fetch agentId from agentAddress mapping
+          const agentId = agentAddressStore.get(payTo.toLowerCase());
+
+          if (agentId) {
+            console.log(`📋 Found v1 agentId ${agentId} for agentAddress ${payTo}`);
+
+            const feedbackResult = await generateClientFeedbackAuth(
+              agentId,
+              clientAddress as Address,
+              network,
+            );
+
+            if (feedbackResult.success && feedbackResult.feedbackAuth) {
+              console.log(`✅ Generated feedbackAuth for v1 agent ${agentId}`);
+            } else {
+              console.error(`❌ Failed to generate feedbackAuth for v1: ${feedbackResult.error}`);
+            }
+          } else {
+            console.warn(
+              `No agentId found for v1 agentAddress ${payTo}, skipping feedbackAuth generation`,
+            );
+          }
+        } else {
+          console.warn(
+            "No client address found in v1 payment payload, skipping feedbackAuth generation",
+          );
+        }
+      }
+
+      return res.json(response);
+    } else if (x402Version === 2) {
+      // Use current facilitator settle for v2
+      console.log("Using x402 v2 for x402Version 2");
+
+      // Hooks will automatically:
+      // - Validate payment was verified (onBeforeSettle - will abort if not)
+      // - Check verification timeout (onBeforeSettle)
+      // - Clean up tracking (onAfterSettle / onSettleFailure)
+      const response: SettleResponse = await facilitator.settle(
+        paymentPayload as PaymentPayload,
+        paymentRequirements as PaymentRequirements,
+      );
+
+      return res.json(response);
+    } else {
+      return res.status(400).json({
+        success: false,
+        errorReason: "invalid_scheme" as any, // Type assertion needed due to strict error enum
+        network: (paymentRequirements as any).network || "base-sepolia",
+        transaction: "",
+      } as LegacySettleResponse);
+    }
   } catch (error) {
     console.error("Settle error:", error);
 
-    // Check if this was an abort from hook
+    // Check if this was an abort from hook (v2 only)
     if (error instanceof Error && error.message.includes("Settlement aborted:")) {
       // Return a proper SettleResponse instead of 500 error
       return res.json({
@@ -529,6 +669,56 @@ app.post("/settle", async (req, res) => {
     }
 
     res.status(500).json({
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+});
+
+/**
+ * POST /register
+ * Register a new agent with ERC-8004
+ */
+app.post("/register", async (req, res) => {
+  try {
+    const {
+      tokenURI,
+      metadata,
+      network = "base-sepolia",
+      x402Version = 1,
+      agentAddress,
+    } = req.body;
+
+    // For v1, agentAddress is required
+    if (x402Version === 1 && !agentAddress) {
+      return res.status(400).json({
+        success: false,
+        error: "agentAddress is required for x402Version 1",
+      });
+    }
+
+    const result = await registerAgent({
+      tokenURI,
+      metadata,
+      network,
+    });
+
+    if (result.success && result.agentId) {
+      // For v1, store agentAddress -> agentId mapping
+      if (x402Version === 1 && agentAddress) {
+        agentAddressStore.set(agentAddress.toLowerCase(), result.agentId);
+        console.log(
+          `📝 Stored v1 agentAddress (${agentAddress}) -> agentId (${result.agentId}) mapping`,
+        );
+      }
+
+      res.json(result);
+    } else {
+      res.status(400).json(result);
+    }
+  } catch (error) {
+    console.error("Register error:", error);
+    res.status(500).json({
+      success: false,
       error: error instanceof Error ? error.message : "Unknown error",
     });
   }

@@ -26,7 +26,9 @@ import {
   encodeAbiParameters,
   keccak256,
   encodePacked,
+  encodeFunctionData,
   type Address,
+  type Authorization,
 } from "viem";
 import { anvil, base, baseSepolia, type Chain } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
@@ -38,6 +40,10 @@ const RPC_URL = process.env.RPC_URL as string | undefined;
 const ERC8004_IDENTITY_REGISTRY_ADDRESS = process.env.ERC8004_IDENTITY_REGISTRY_ADDRESS as
   | `0x${string}`
   | undefined;
+const DELEGATE_CONTRACT_ADDRESS = process.env.DELEGATE_CONTRACT_ADDRESS as
+  | `0x${string}`
+  | undefined;
+const TEST_CONTRACT_ADDRESS = process.env.TEST_CONTRACT_ADDRESS as `0x${string}` | undefined;
 const PORT = process.env.PORT || "4022";
 
 const app = express();
@@ -111,6 +117,23 @@ const identityRegistryAbi = parseAbi([
   "struct MetadataEntry { string key; bytes value; }",
 ]);
 
+const delegateContractAbi = parseAbi([
+  "function register(address registry) returns (uint256 agentId)",
+  "function register(address registry, string calldata tokenURI) returns (uint256 agentId)",
+  "function register(address registry, string calldata tokenURI, MetadataEntry[] calldata metadata) returns (uint256 agentId)",
+  "function testDelegation(address testContract, string calldata message) external",
+  "function getVersion(address registry) external view returns (string memory version)",
+  "function getVersion(address registry) external",
+  "event TestVersion(address indexed caller, address indexed registry, string version)",
+  "struct MetadataEntry { string key; bytes value; }",
+]);
+
+const testContractAbi = parseAbi([
+  "function testLog(string calldata message) external",
+  "function testLogWithRegistry(address registry, string calldata message) external",
+  "event TestLog(address indexed caller, string message, uint256 timestamp)",
+]);
+
 // Validate required environment variables
 if (!process.env.EVM_PRIVATE_KEY) {
   console.error("❌ EVM_PRIVATE_KEY environment variable is required");
@@ -173,6 +196,8 @@ function createPaymentHash(paymentPayload: PaymentPayload): string {
 }
 
 type RegisterInfo = {
+  agentAddress: Address;
+  authorization: Authorization;
   tokenURI?: string;
   metadata?: { key: string; value: string }[];
   network?: string;
@@ -195,7 +220,7 @@ type GenerateFeedbackAuthResult = {
 };
 
 const registerAgent = async (info: RegisterInfo): Promise<RegisterResult> => {
-  const { network, tokenURI, metadata } = info;
+  const { network, tokenURI, metadata, agentAddress, authorization } = info;
 
   if (!network) {
     console.log("Registration failed: missing network");
@@ -205,8 +230,8 @@ const registerAgent = async (info: RegisterInfo): Promise<RegisterResult> => {
     };
   }
 
-  if (!RPC_URL || !ERC8004_IDENTITY_REGISTRY_ADDRESS) {
-    console.log("Registration failed: missing RPC_URL or REGISTRY address");
+  if (!RPC_URL || !ERC8004_IDENTITY_REGISTRY_ADDRESS || !DELEGATE_CONTRACT_ADDRESS) {
+    console.log("Registration failed: missing RPC_URL, REGISTRY address, or DELEGATE address");
     return {
       success: false,
       error: "Facilitator not configured for ERC-8004 registration",
@@ -226,7 +251,6 @@ const registerAgent = async (info: RegisterInfo): Promise<RegisterResult> => {
   try {
     const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
 
-    // Facilitator registers itself
     if (!FACILITATOR_PRIVATE_KEY) {
       console.log("Registration failed: FACILITATOR_PRIVATE_KEY required");
       return {
@@ -235,45 +259,67 @@ const registerAgent = async (info: RegisterInfo): Promise<RegisterResult> => {
       };
     }
 
-    console.log("Registering agent with ERC-8004");
-
     const account = privateKeyToAccount(FACILITATOR_PRIVATE_KEY as `0x${string}`);
     const walletClient = createWalletClient({ account, chain, transport: http(RPC_URL) });
-    const facilitatorAddress = account.address;
 
-    let hash: `0x${string}`;
-    let agentId: string | undefined;
-
-    // Build transaction based on provided parameters
+    // Prepare metadata entries if provided
+    let metadataEntries: Array<{ key: string; value: `0x${string}` }> | undefined;
     if (metadata && metadata.length > 0) {
-      const metadataEntries = metadata.map((entry: { key: string; value: string }) => ({
+      metadataEntries = metadata.map((entry: { key: string; value: string }) => ({
         key: entry.key,
         value: entry.value.startsWith("0x")
           ? (entry.value as `0x${string}`)
           : (`0x${Buffer.from(entry.value).toString("hex")}` as `0x${string}`),
       }));
+    }
 
-      hash = await walletClient.writeContract({
-        address: ERC8004_IDENTITY_REGISTRY_ADDRESS,
-        abi: identityRegistryAbi,
+    // Verify authorization matches delegate contract
+    const delegateAddress = DELEGATE_CONTRACT_ADDRESS!; // Already checked above
+    if (authorization.address.toLowerCase() !== delegateAddress.toLowerCase()) {
+      console.error(
+        `❌ Authorization address mismatch! Expected: ${delegateAddress}, Got: ${authorization.address}`,
+      );
+      return {
+        success: false,
+        error: `Authorization address (${authorization.address}) does not match delegate contract address (${delegateAddress})`,
+      };
+    }
+
+    console.log(`✅ Authorization verified:`);
+    console.log(`   - Delegate Address: ${authorization.address}`);
+    console.log(`   - ChainId: ${authorization.chainId}`);
+    console.log(`   - Nonce: ${authorization.nonce}`);
+    console.log(`   - Agent Address: ${agentAddress}`);
+
+    // Execute EIP-7702 transaction with authorization list
+    // The call is made to the agent's address (which is delegated to the delegate contract)
+    // The delegate contract will call IdentityRegistry.register() with agent as msg.sender
+    let data: `0x${string}`;
+    if (metadataEntries && metadataEntries.length > 0) {
+      data = encodeFunctionData({
+        abi: delegateContractAbi,
         functionName: "register",
-        args: [tokenURI || "", metadataEntries],
+        args: [ERC8004_IDENTITY_REGISTRY_ADDRESS, tokenURI || "", metadataEntries],
       });
     } else if (tokenURI) {
-      hash = await walletClient.writeContract({
-        address: ERC8004_IDENTITY_REGISTRY_ADDRESS,
-        abi: identityRegistryAbi,
+      data = encodeFunctionData({
+        abi: delegateContractAbi,
         functionName: "register",
-        args: [tokenURI],
+        args: [ERC8004_IDENTITY_REGISTRY_ADDRESS, tokenURI],
       });
     } else {
-      hash = await walletClient.writeContract({
-        address: ERC8004_IDENTITY_REGISTRY_ADDRESS,
-        abi: identityRegistryAbi,
+      data = encodeFunctionData({
+        abi: delegateContractAbi,
         functionName: "register",
-        args: [],
+        args: [ERC8004_IDENTITY_REGISTRY_ADDRESS],
       });
     }
+
+    const hash = await walletClient.sendTransaction({
+      authorizationList: [authorization],
+      data,
+      to: agentAddress, // The EOA that's being delegated
+    });
 
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
 
@@ -291,6 +337,7 @@ const registerAgent = async (info: RegisterInfo): Promise<RegisterResult> => {
       }
     });
 
+    let agentId: string | undefined;
     if (registeredEvent) {
       try {
         const decoded = decodeEventLog({
@@ -299,6 +346,7 @@ const registerAgent = async (info: RegisterInfo): Promise<RegisterResult> => {
           topics: registeredEvent.topics,
         });
         if (decoded.eventName === "Registered") {
+          console.log("Registered event decoded:", decoded);
           agentId = decoded.args.agentId?.toString();
         }
       } catch (err) {
@@ -310,7 +358,7 @@ const registerAgent = async (info: RegisterInfo): Promise<RegisterResult> => {
       success: true,
       network,
       txHash: hash,
-      agentOwner: facilitatorAddress,
+      agentOwner: agentAddress, // Agent is the owner, not facilitator
       agentId,
     };
   } catch (e: any) {
@@ -677,6 +725,7 @@ app.post("/settle", async (req, res) => {
 /**
  * POST /register
  * Register a new agent with ERC-8004
+ * COMMENTED OUT FOR TESTING - Use /register-test instead
  */
 app.post("/register", async (req, res) => {
   try {
@@ -686,17 +735,40 @@ app.post("/register", async (req, res) => {
       network = "base-sepolia",
       x402Version = 1,
       agentAddress,
+      authorization,
     } = req.body;
 
-    // For v1, agentAddress is required
-    if (x402Version === 1 && !agentAddress) {
-      return res.status(400).json({
-        success: false,
-        error: "agentAddress is required for x402Version 1",
-      });
+    // For v1, agentAddress and authorization are required
+    if (x402Version === 1) {
+      if (!agentAddress) {
+        return res.status(400).json({
+          success: false,
+          error: "agentAddress is required for x402Version 1",
+        });
+      }
+      if (!authorization) {
+        return res.status(400).json({
+          success: false,
+          error: "authorization is required for x402Version 1 (EIP-7702)",
+        });
+      }
     }
 
+    // Deserialize authorization - convert string values back to BigInt for viem
+    // Note: viem's Authorization type expects numbers, but EIP-7702 uses BigInt
+    // We'll use type assertion since the values are correct at runtime
+    const deserializedAuthorization = {
+      chainId: BigInt((authorization as any).chainId),
+      address: (authorization as any).address as Address,
+      nonce: BigInt((authorization as any).nonce),
+      yParity: (authorization as any).yParity as 0 | 1,
+      r: (authorization as any).r as `0x${string}`,
+      s: (authorization as any).s as `0x${string}`,
+    } as unknown as Authorization;
+
     const result = await registerAgent({
+      agentAddress: agentAddress as Address,
+      authorization: deserializedAuthorization,
       tokenURI,
       metadata,
       network,

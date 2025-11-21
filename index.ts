@@ -34,7 +34,6 @@ import {
   DELEGATE_CONTRACT_ADDRESS,
   PORT,
   FACILITATOR_PRIVATE_KEY,
-  EVM_PRIVATE_KEY,
 } from "./src/config/env";
 import { delegateContractAbi } from "./src/config/contracts";
 
@@ -49,7 +48,7 @@ const app = express();
 app.use(express.json());
 
 // Initialize the EVM account from private key
-const evmAccount = privateKeyToAccount(EVM_PRIVATE_KEY as `0x${string}`);
+const evmAccount = privateKeyToAccount(FACILITATOR_PRIVATE_KEY as `0x${string}`);
 
 // Create a Viem client with both wallet and public capabilities
 const viemClient = createWalletClient({

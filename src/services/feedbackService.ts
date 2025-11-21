@@ -196,8 +196,6 @@ export async function generateClientFeedbackAuth(
         `📝 Stored feedbackAuth and agentId (${agentId}) for client address: ${clientAddress}`,
       );
 
-      console.log(`FeedbackAuth: ${feedbackAuth}`);
-
       return {
         success: true,
         agentId,

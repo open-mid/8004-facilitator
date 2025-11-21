@@ -19,13 +19,6 @@ export const AGENT_SERVER_URL = process.env.AGENT_SERVER_URL as string | undefin
 export const PORT = process.env.PORT || "4022";
 
 export const FACILITATOR_PRIVATE_KEY = normalizePrivateKey(process.env.FACILITATOR_PRIVATE_KEY);
-export const EVM_PRIVATE_KEY = process.env.EVM_PRIVATE_KEY as string | undefined;
-
-// Validate required environment variables
-if (!EVM_PRIVATE_KEY) {
-  console.error("❌ EVM_PRIVATE_KEY environment variable is required");
-  process.exit(1);
-}
 
 if (!FACILITATOR_PRIVATE_KEY) {
   console.error("❌ FACILITATOR_PRIVATE_KEY environment variable is required");

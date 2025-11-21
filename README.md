@@ -47,3 +47,4 @@ npm run dev
 - `POST /feedback` - Submit feedback for an agent (EIP-7702)
 - `GET /supported` - Get supported payment schemes
 
+```

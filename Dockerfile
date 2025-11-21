@@ -13,7 +13,7 @@ RUN git clone --depth 1 --branch v2-development https://github.com/coinbase/x402
     pnpm install && \
     pnpm turbo run build --filter=@x402/core --filter=@x402/evm && \
     cd packages/legacy/x402 && pnpm build && \
-    cd ../../../../..
+    cd /app
 
 
 # Create facilitator directory (so file:../x402 paths work correctly)
@@ -23,6 +23,7 @@ WORKDIR /app/facilitator
 COPY package*.json ./
 COPY tsconfig.json ./
 COPY index.ts ./
+COPY src ./src
 COPY eslint.config.js ./
 COPY .prettierrc* ./
 

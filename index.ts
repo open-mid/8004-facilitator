@@ -1,4 +1,3 @@
-import { config } from "dotenv";
 import express from "express";
 import { x402Facilitator } from "@x402/core/facilitator";
 // Import legacy verify/settle functions - using file path since @x402/legacy points to the legacy directory
@@ -21,126 +20,36 @@ import {
   createWalletClient,
   http,
   publicActions,
-  parseAbi,
-  decodeEventLog,
-  encodeAbiParameters,
-  keccak256,
-  encodePacked,
   encodeFunctionData,
   type Address,
   type Authorization,
 } from "viem";
-import { anvil, base, baseSepolia, type Chain } from "viem/chains";
+import { baseSepolia } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
-import crypto from "crypto";
 
-config();
+// Import config
+import {
+  RPC_URL,
+  ERC8004_REPUTATION_REGISTRY_ADDRESS,
+  DELEGATE_CONTRACT_ADDRESS,
+  PORT,
+  FACILITATOR_PRIVATE_KEY,
+  EVM_PRIVATE_KEY,
+} from "./src/config/env";
+import { delegateContractAbi } from "./src/config/contracts";
 
-const RPC_URL = process.env.RPC_URL as string | undefined;
-const ERC8004_IDENTITY_REGISTRY_ADDRESS = process.env.ERC8004_IDENTITY_REGISTRY_ADDRESS as
-  | `0x${string}`
-  | undefined;
-const ERC8004_REPUTATION_REGISTRY_ADDRESS = process.env.ERC8004_REPUTATION_REGISTRY_ADDRESS as
-  | `0x${string}`
-  | undefined;
-const DELEGATE_CONTRACT_ADDRESS = process.env.DELEGATE_CONTRACT_ADDRESS as
-  | `0x${string}`
-  | undefined;
-const AGENT_SERVER_URL = process.env.AGENT_SERVER_URL as string | undefined;
-const PORT = process.env.PORT || "4022";
+// Import utils
+import { mapX402NetworkToChain } from "./src/utils/network";
+
+// Import services
+import { registerAgent, type RegisterInfo } from "./src/services/registerService";
+import { generateClientFeedbackAuth } from "./src/services/feedbackService";
 
 const app = express();
 app.use(express.json());
 
-// Normalize private keys - add 0x prefix if missing
-let FACILITATOR_PRIVATE_KEY = process.env.FACILITATOR_PRIVATE_KEY;
-if (FACILITATOR_PRIVATE_KEY && !FACILITATOR_PRIVATE_KEY.startsWith("0x")) {
-  FACILITATOR_PRIVATE_KEY = "0x" + FACILITATOR_PRIVATE_KEY;
-}
-
-let FEEDBACK_PRIVATE_KEY = process.env.FEEDBACK_PRIVATE_KEY || FACILITATOR_PRIVATE_KEY;
-if (FEEDBACK_PRIVATE_KEY && !FEEDBACK_PRIVATE_KEY.startsWith("0x")) {
-  FEEDBACK_PRIVATE_KEY = "0x" + FEEDBACK_PRIVATE_KEY;
-}
-
-function isLocalRPC(rpcUrl?: string): boolean {
-  if (!rpcUrl) return false;
-  try {
-    const url = new URL(rpcUrl);
-    return url.hostname === "localhost" || url.hostname === "127.0.0.1";
-  } catch {
-    return rpcUrl?.includes("localhost") || rpcUrl?.includes("127.0.0.1");
-  }
-}
-
-function mapX402NetworkToChain(network?: string, rpcUrl?: string): Chain | undefined {
-  // If RPC is local, always use anvil chain (chainId 31337)
-  if (isLocalRPC(rpcUrl)) {
-    console.log("Detected local RPC, using anvil chain (chainId: 31337)");
-    return anvil;
-  }
-
-  if (!network) {
-    return undefined;
-  }
-
-  // Handle CAIP-2 format (eip155:chainId)
-  if (network.startsWith("eip155:")) {
-    const chainId = parseInt(network.split(":")[1]);
-
-    // Map known chain IDs to viem chains
-    switch (chainId) {
-      case 84532: // Base Sepolia
-        return baseSepolia;
-      case 8453: // Base Mainnet
-        return base;
-      case 31337: // Anvil (local)
-        return anvil;
-      default:
-        // For unknown chain IDs, try to find in viem chains
-        // This would require importing all chains, so for now just return undefined
-        console.warn(`Unknown chain ID: ${chainId} for network: ${network}`);
-        return undefined;
-    }
-  }
-
-  // Handle simple network names (V1 format)
-  switch (network) {
-    case "base-sepolia":
-      return baseSepolia;
-    case "base":
-      return base;
-    default:
-      return undefined;
-  }
-}
-
-const identityRegistryAbi = parseAbi([
-  "function register() returns (uint256 agentId)",
-  "function register(string calldata tokenURI_) returns (uint256 agentId)",
-  "function register(string calldata tokenURI_, MetadataEntry[] calldata metadata) returns (uint256 agentId)",
-  "function balanceOf(address owner) view returns (uint256 balance)",
-  "function ownerOf(uint256 tokenId) view returns (address owner)",
-  "event Registered(uint256 indexed agentId, string tokenURI, address indexed owner)",
-  "struct MetadataEntry { string key; bytes value; }",
-]);
-
-const delegateContractAbi = parseAbi([
-  "function register(address registry) returns (uint256 agentId)",
-  "function register(address registry, string calldata tokenURI) returns (uint256 agentId)",
-  "function register(address registry, string calldata tokenURI, MetadataEntry[] calldata metadata) returns (uint256 agentId)",
-  "struct MetadataEntry { string key; bytes value; }",
-  "function giveFeedback(address registry, uint256 agentId, uint8 score, bytes32 tag1, bytes32 tag2, string calldata fileuri, bytes32 filehash, bytes memory feedbackAuth)",
-]);
-
-// Validate required environment variables
-if (!process.env.EVM_PRIVATE_KEY) {
-  console.error("❌ EVM_PRIVATE_KEY environment variable is required");
-  process.exit(1);
-}
-
 // Initialize the EVM account from private key
-const evmAccount = privateKeyToAccount(process.env.EVM_PRIVATE_KEY as `0x${string}`);
+const evmAccount = privateKeyToAccount(EVM_PRIVATE_KEY as `0x${string}`);
 
 // Create a Viem client with both wallet and public capabilities
 const viemClient = createWalletClient({
@@ -189,279 +98,6 @@ const feedbackAuthStore = new Map<string, { agentId: string; feedbackAuth: strin
 
 // Store agent address -> agentId mapping (for v1)
 const agentAddressStore = new Map<string, string>();
-
-function createPaymentHash(paymentPayload: PaymentPayload): string {
-  return crypto.createHash("sha256").update(JSON.stringify(paymentPayload)).digest("hex");
-}
-
-type RegisterInfo = {
-  agentAddress: Address;
-  authorization: Authorization;
-  tokenURI?: string;
-  metadata?: { key: string; value: string }[];
-  network?: string;
-};
-
-type RegisterResult = {
-  success: boolean;
-  network?: string;
-  agentId?: string;
-  agentOwner?: string;
-  txHash?: string;
-  error?: string;
-};
-
-type GenerateFeedbackAuthResult = {
-  success: boolean;
-  agentId?: string;
-  feedbackAuth?: string;
-  error?: string;
-};
-
-const registerAgent = async (info: RegisterInfo): Promise<RegisterResult> => {
-  const { network, tokenURI, metadata, agentAddress, authorization } = info;
-
-  if (!network) {
-    console.log("Registration failed: missing network");
-    return {
-      success: false,
-      error: "Missing required field: network",
-    };
-  }
-
-  if (!RPC_URL || !ERC8004_IDENTITY_REGISTRY_ADDRESS || !DELEGATE_CONTRACT_ADDRESS) {
-    console.log("Registration failed: missing RPC_URL, REGISTRY address, or DELEGATE address");
-    return {
-      success: false,
-      error: "Facilitator not configured for ERC-8004 registration",
-    };
-  }
-
-  const chain = mapX402NetworkToChain(network, RPC_URL);
-  if (!chain) {
-    console.log("Registration failed: unsupported network:", network);
-    return {
-      success: false,
-      error: `Unsupported network: ${network}`,
-      network,
-    };
-  }
-
-  try {
-    const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
-
-    if (!FACILITATOR_PRIVATE_KEY) {
-      console.log("Registration failed: FACILITATOR_PRIVATE_KEY required");
-      return {
-        success: false,
-        error: "Facilitator private key not configured",
-      };
-    }
-
-    const account = privateKeyToAccount(FACILITATOR_PRIVATE_KEY as `0x${string}`);
-    const walletClient = createWalletClient({ account, chain, transport: http(RPC_URL) });
-
-    // Prepare metadata entries if provided
-    let metadataEntries: Array<{ key: string; value: `0x${string}` }> | undefined;
-    if (metadata && metadata.length > 0) {
-      metadataEntries = metadata.map((entry: { key: string; value: string }) => ({
-        key: entry.key,
-        value: entry.value.startsWith("0x")
-          ? (entry.value as `0x${string}`)
-          : (`0x${Buffer.from(entry.value).toString("hex")}` as `0x${string}`),
-      }));
-    }
-
-    // Verify authorization matches delegate contract
-    const delegateAddress = DELEGATE_CONTRACT_ADDRESS!; // Already checked above
-    if (authorization.address.toLowerCase() !== delegateAddress.toLowerCase()) {
-      console.error(
-        `❌ Authorization address mismatch! Expected: ${delegateAddress}, Got: ${authorization.address}`,
-      );
-      return {
-        success: false,
-        error: `Authorization address (${authorization.address}) does not match delegate contract address (${delegateAddress})`,
-      };
-    }
-
-    console.log(`✅ Authorization verified:`);
-    console.log(`   - Delegate Address: ${authorization.address}`);
-    console.log(`   - ChainId: ${authorization.chainId}`);
-    console.log(`   - Nonce: ${authorization.nonce}`);
-    console.log(`   - Agent Address: ${agentAddress}`);
-
-    // Execute EIP-7702 transaction with authorization list
-    // The call is made to the agent's address (which is delegated to the delegate contract)
-    // The delegate contract will call IdentityRegistry.register() with agent as msg.sender
-    let data: `0x${string}`;
-    if (metadataEntries && metadataEntries.length > 0) {
-      data = encodeFunctionData({
-        abi: delegateContractAbi,
-        functionName: "register",
-        args: [ERC8004_IDENTITY_REGISTRY_ADDRESS, tokenURI || "", metadataEntries],
-      });
-    } else if (tokenURI) {
-      data = encodeFunctionData({
-        abi: delegateContractAbi,
-        functionName: "register",
-        args: [ERC8004_IDENTITY_REGISTRY_ADDRESS, tokenURI],
-      });
-    } else {
-      data = encodeFunctionData({
-        abi: delegateContractAbi,
-        functionName: "register",
-        args: [ERC8004_IDENTITY_REGISTRY_ADDRESS],
-      });
-    }
-
-    const hash = await walletClient.sendTransaction({
-      authorizationList: [authorization],
-      data,
-      to: agentAddress, // The EOA that's being delegated
-    });
-
-    const receipt = await publicClient.waitForTransactionReceipt({ hash });
-
-    // Extract agentId from Registered event
-    const registeredEvent = receipt.logs.find(log => {
-      try {
-        const decoded = decodeEventLog({
-          abi: identityRegistryAbi,
-          data: log.data,
-          topics: log.topics,
-        });
-        return decoded.eventName === "Registered";
-      } catch {
-        return false;
-      }
-    });
-
-    let agentId: string | undefined;
-    if (registeredEvent) {
-      try {
-        const decoded = decodeEventLog({
-          abi: identityRegistryAbi,
-          data: registeredEvent.data,
-          topics: registeredEvent.topics,
-        });
-        if (decoded.eventName === "Registered") {
-          console.log("Registered event decoded:", decoded);
-          agentId = decoded.args.agentId?.toString();
-        }
-      } catch (err) {
-        console.log("ERC-8004: Failed to decode Registered event", err);
-      }
-    }
-
-    return {
-      success: true,
-      network,
-      txHash: hash,
-      agentOwner: agentAddress, // Agent is the owner, not facilitator
-      agentId,
-    };
-  } catch (e: any) {
-    console.error("ERC-8004: Registration failed:", e?.message || e);
-
-    return {
-      success: false,
-      error: e?.message || "Registration failed",
-      network,
-    };
-  }
-};
-
-const generateClientFeedbackAuth = async (
-  agentId: string,
-  clientAddress: Address,
-  network: string,
-  agentUrl?: string,
-): Promise<GenerateFeedbackAuthResult> => {
-  if (!RPC_URL || !ERC8004_IDENTITY_REGISTRY_ADDRESS) {
-    return {
-      success: false,
-      error: "Facilitator not configured for ERC-8004",
-    };
-  }
-
-  if (!FACILITATOR_PRIVATE_KEY) {
-    return {
-      success: false,
-      error: "Facilitator private key not configured",
-    };
-  }
-
-  const chain = mapX402NetworkToChain(network, RPC_URL);
-  if (!chain) {
-    return {
-      success: false,
-      error: `Unsupported network: ${network}`,
-    };
-  }
-
-  try {
-    const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
-
-    // Get the actual chain ID from the blockchain
-    const actualChainId = await publicClient.getChainId();
-
-    // Check if agent exists and belongs to facilitator
-    try {
-      const agentIdBigInt = BigInt(agentId);
-      const owner = await publicClient.readContract({
-        address: ERC8004_IDENTITY_REGISTRY_ADDRESS,
-        abi: identityRegistryAbi,
-        functionName: "ownerOf",
-        args: [agentIdBigInt],
-      });
-      // Agent exists and belongs to facilitator - generate feedbackAuth
-      console.log(
-        `ERC-8004: Agent ${agentId} exists and belongs to ${owner}, generating feedbackAuth`,
-      );
-
-      const feedbackAuth = await generateFeedbackAuth(
-        agentId,
-        clientAddress,
-        owner,
-        FACILITATOR_PRIVATE_KEY as `0x${string}`,
-        actualChainId,
-        undefined, // expiry
-        undefined, // indexLimit
-        agentUrl, // agentUrl
-      );
-
-      // Store feedbackAuth and agentId
-      feedbackAuthStore.set(clientAddress.toLowerCase(), {
-        agentId,
-        feedbackAuth,
-      });
-
-      console.log(
-        `📝 Stored feedbackAuth and agentId (${agentId}) for client address: ${clientAddress}`,
-      );
-
-      console.log(`FeedbackAuth: ${feedbackAuth}`);
-
-      return {
-        success: true,
-        agentId,
-        feedbackAuth,
-      };
-    } catch (err) {
-      // If ownerOf reverts, agent doesn't exist
-      return {
-        success: false,
-        error: `Agent ${agentId} does not exist: ${err instanceof Error ? err.message : "Unknown error"}`,
-      };
-    }
-  } catch (e: any) {
-    console.error("ERC-8004: Failed to generate feedbackAuth:", e?.message || e);
-    return {
-      success: false,
-      error: e?.message || "Failed to generate feedbackAuth",
-    };
-  }
-};
 
 const facilitator = new x402Facilitator()
   .registerScheme("eip155:*", new ExactEvmFacilitator(evmSigner))
@@ -518,6 +154,7 @@ const facilitator = new x402Facilitator()
       registerInfo.agentId,
       clientAddress as Address,
       network,
+      feedbackAuthStore,
       agentUrl,
     );
 
@@ -678,6 +315,7 @@ app.post("/settle", async (req, res) => {
               agentId,
               clientAddress as Address,
               network,
+              feedbackAuthStore,
               undefined, // agentUrl - not available in v1 context
             );
 
@@ -855,48 +493,6 @@ app.get("/health", (req, res) => {
 });
 
 /**
- * GET /getFeedbackAuth
- * Retrieve feedbackAuth for a given client address
- */
-app.get("/getFeedbackAuth", (req, res) => {
-  try {
-    const { clientAddress } = req.query;
-
-    if (!clientAddress || typeof clientAddress !== "string") {
-      return res.status(400).json({
-        success: false,
-        error: "Missing or invalid clientAddress query parameter",
-      });
-    }
-
-    const storedData = feedbackAuthStore.get(clientAddress.toLowerCase());
-
-    if (!storedData) {
-      return res.status(404).json({
-        success: false,
-        error: "FeedbackAuth not found for the given client address",
-      });
-    }
-
-    console.log(
-      `Retrieved feedbackAuth and agentId (${storedData.agentId}) for client address: ${clientAddress}`,
-    );
-    res.json({
-      success: true,
-      clientAddress,
-      agentId: storedData.agentId,
-      feedbackAuth: storedData.feedbackAuth,
-    });
-  } catch (error) {
-    console.error("GetFeedbackAuth error:", error);
-    res.status(500).json({
-      success: false,
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
-  }
-});
-
-/**
  * POST /feedback
  * Submit feedback to the reputation registry on behalf of a client using EIP-7702 authorization
  */
@@ -954,35 +550,6 @@ app.post("/feedback", async (req, res) => {
 
     const { agentId, feedbackAuth } = storedData;
 
-    // Validate required environment variables
-    if (!ERC8004_REPUTATION_REGISTRY_ADDRESS) {
-      return res.status(500).json({
-        success: false,
-        error: "ERC8004_REPUTATION_REGISTRY_ADDRESS not configured",
-      });
-    }
-
-    if (!DELEGATE_CONTRACT_ADDRESS) {
-      return res.status(500).json({
-        success: false,
-        error: "DELEGATE_CONTRACT_ADDRESS not configured",
-      });
-    }
-
-    if (!RPC_URL) {
-      return res.status(500).json({
-        success: false,
-        error: "RPC_URL not configured",
-      });
-    }
-
-    if (!FACILITATOR_PRIVATE_KEY) {
-      return res.status(500).json({
-        success: false,
-        error: "FACILITATOR_PRIVATE_KEY not configured (required for EIP-7702)",
-      });
-    }
-
     // Get chain for network
     const chain = mapX402NetworkToChain(network, RPC_URL);
     if (!chain) {
@@ -1032,11 +599,12 @@ app.post("/feedback", async (req, res) => {
     } as unknown as Authorization;
 
     // Verify authorization matches expected delegate address
-    const expectedDelegateAddress = DELEGATE_CONTRACT_ADDRESS;
-    if (deserializedAuthorization.address.toLowerCase() !== expectedDelegateAddress.toLowerCase()) {
+    if (
+      deserializedAuthorization.address.toLowerCase() !== DELEGATE_CONTRACT_ADDRESS.toLowerCase()
+    ) {
       return res.status(400).json({
         success: false,
-        error: `Authorization address mismatch. Expected: ${expectedDelegateAddress}, Got: ${deserializedAuthorization.address}`,
+        error: `Authorization address mismatch. Expected: ${DELEGATE_CONTRACT_ADDRESS}, Got: ${deserializedAuthorization.address}`,
       });
     }
 
@@ -1113,134 +681,20 @@ app.listen(parseInt(PORT), () => {
 ╔════════════════════════════════════════════════════════╗
 ║           x402 TypeScript Facilitator                  ║
 ╠════════════════════════════════════════════════════════╣
-║  Server:     http://localhost:${PORT}                  ║
 ║  Network:    eip155:84532                              ║
-║  Address:    ${evmAccount.address}                        ║
-║  Extensions: register                                    ║
+║  Extensions: register                                  ║
 ║                                                        ║
 ║  Endpoints:                                            ║
-║  • POST /verify              (verify payment)         ║
-║  • POST /settle              (settle payment)         ║
-║  • GET  /supported           (get supported kinds)    ║
-║  • GET  /health              (health check)           ║
-║  • GET  /getFeedbackAuth     (get feedback auth)      ║
-║  • POST /feedback            (submit feedback)        ║
-║  • POST /close               (shutdown server)        ║
+║  • POST /verify              (verify payment)          ║
+║  • POST /settle              (settle payment)          ║
+║  • GET  /supported           (get supported kinds)     ║
+║  • GET  /health              (health check)            ║
+║  • POST /feedback            (submit feedback)         ║
+║  • POST /close               (shutdown server)         ║
+║  • POST /register            (register agent)          ║
 ╚════════════════════════════════════════════════════════╝
   `);
 
   // Log that facilitator is ready (needed for e2e test discovery)
   console.log("Facilitator listening");
 });
-
-// Helper function to generate feedbackAuth for ERC-8004 feedback
-async function generateFeedbackAuth(
-  agentId: string,
-  clientAddress: Address,
-  agentOwnerAddress: Address,
-  agentOwnerPrivateKey: `0x${string}`,
-  chainId: number,
-  expiry?: bigint,
-  indexLimit: bigint = 1000n,
-  agentUrl?: string,
-): Promise<`0x${string}`> {
-  if (!ERC8004_IDENTITY_REGISTRY_ADDRESS) {
-    throw new Error("ERC8004_IDENTITY_REGISTRY_ADDRESS not configured");
-  }
-
-  const expiryTime = expiry || BigInt(Math.floor(Date.now() / 1000) + 3600); // 1 hour default
-
-  // Create the FeedbackAuth struct - order must match Solidity struct exactly
-  const feedbackAuthStruct = encodeAbiParameters(
-    [
-      { name: "agentId", type: "uint256" },
-      { name: "clientAddress", type: "address" },
-      { name: "indexLimit", type: "uint64" },
-      { name: "expiry", type: "uint256" },
-      { name: "chainId", type: "uint256" },
-      { name: "identityRegistry", type: "address" },
-      { name: "signerAddress", type: "address" },
-    ],
-    [
-      BigInt(agentId),
-      clientAddress,
-      indexLimit,
-      expiryTime,
-      BigInt(chainId),
-      ERC8004_IDENTITY_REGISTRY_ADDRESS,
-      agentOwnerAddress,
-    ],
-  );
-
-  // Hash the struct the same way the contract's _hashFeedbackAuth does:
-  // 1. First hash the struct: keccak256(abi.encode(auth))
-  // 2. Then apply EIP-191 prefix: keccak256("\x19Ethereum Signed Message:\n32" + structHash)
-  const structHash = keccak256(feedbackAuthStruct);
-  const eip191Hash = keccak256(
-    encodePacked(["string", "bytes32"], ["\x19Ethereum Signed Message:\n32", structHash]),
-  );
-
-  // Sign the EIP-191 hash via the agent server's /signFeedbackAuth endpoint
-  // Use agentUrl from context if provided, otherwise fall back to AGENT_SERVER_URL env var
-  const serverUrl = agentUrl || AGENT_SERVER_URL;
-  let signature: `0x${string}`;
-  if (serverUrl) {
-    try {
-      // Extract base URL from agentUrl (remove path if present)
-      let baseUrl: string;
-      if (agentUrl) {
-        try {
-          const url = new URL(agentUrl);
-          baseUrl = url.origin; // Extract just the origin (protocol + host + port)
-        } catch {
-          // If agentUrl is not a valid URL, use it as-is (might be just a hostname)
-          baseUrl = agentUrl;
-        }
-      } else {
-        baseUrl = serverUrl;
-      }
-      console.log(`📤 Requesting signature from agent server: ${baseUrl}/signFeedbackAuth`);
-      const signResponse = await fetch(`${baseUrl}/signFeedbackAuth`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          hash: eip191Hash,
-        }),
-      });
-
-      if (!signResponse.ok) {
-        const errorData = await signResponse.json().catch(() => ({ error: "Unknown error" }));
-        throw new Error(
-          `Failed to get signature from agent server: ${errorData.error || signResponse.statusText}`,
-        );
-      }
-
-      const signResult = await signResponse.json();
-      if (!signResult.success || !signResult.signature) {
-        throw new Error(
-          `Agent server returned unsuccessful response: ${signResult.error || "No signature"}`,
-        );
-      }
-
-      signature = signResult.signature as `0x${string}`;
-      console.log(`✅ Received signature from agent server`);
-    } catch (error) {
-      console.error(`❌ Failed to get signature from agent server: ${error}`);
-      // Fallback to local signing if server is unavailable
-      console.log(`⚠️ Falling back to local signing with provided private key`);
-      const account = privateKeyToAccount(agentOwnerPrivateKey);
-      signature = await account.sign({ hash: eip191Hash });
-    }
-  } else {
-    // No agent server URL configured, use local signing
-    const account = privateKeyToAccount(agentOwnerPrivateKey);
-    signature = await account.sign({ hash: eip191Hash });
-  }
-
-  // Encode: [struct bytes][signature (65 bytes: r=32, s=32, v=1)]
-  const feedbackAuth = (feedbackAuthStruct + signature.slice(2)) as `0x${string}`;
-
-  return feedbackAuth;
-}

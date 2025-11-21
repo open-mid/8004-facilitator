@@ -40,10 +40,13 @@ const RPC_URL = process.env.RPC_URL as string | undefined;
 const ERC8004_IDENTITY_REGISTRY_ADDRESS = process.env.ERC8004_IDENTITY_REGISTRY_ADDRESS as
   | `0x${string}`
   | undefined;
+const ERC8004_REPUTATION_REGISTRY_ADDRESS = process.env.ERC8004_REPUTATION_REGISTRY_ADDRESS as
+  | `0x${string}`
+  | undefined;
 const DELEGATE_CONTRACT_ADDRESS = process.env.DELEGATE_CONTRACT_ADDRESS as
   | `0x${string}`
   | undefined;
-const TEST_CONTRACT_ADDRESS = process.env.TEST_CONTRACT_ADDRESS as `0x${string}` | undefined;
+const AGENT_SERVER_URL = process.env.AGENT_SERVER_URL as string | undefined;
 const PORT = process.env.PORT || "4022";
 
 const app = express();
@@ -53,6 +56,11 @@ app.use(express.json());
 let FACILITATOR_PRIVATE_KEY = process.env.FACILITATOR_PRIVATE_KEY;
 if (FACILITATOR_PRIVATE_KEY && !FACILITATOR_PRIVATE_KEY.startsWith("0x")) {
   FACILITATOR_PRIVATE_KEY = "0x" + FACILITATOR_PRIVATE_KEY;
+}
+
+let FEEDBACK_PRIVATE_KEY = process.env.FEEDBACK_PRIVATE_KEY || FACILITATOR_PRIVATE_KEY;
+if (FEEDBACK_PRIVATE_KEY && !FEEDBACK_PRIVATE_KEY.startsWith("0x")) {
+  FEEDBACK_PRIVATE_KEY = "0x" + FEEDBACK_PRIVATE_KEY;
 }
 
 function isLocalRPC(rpcUrl?: string): boolean {
@@ -121,17 +129,8 @@ const delegateContractAbi = parseAbi([
   "function register(address registry) returns (uint256 agentId)",
   "function register(address registry, string calldata tokenURI) returns (uint256 agentId)",
   "function register(address registry, string calldata tokenURI, MetadataEntry[] calldata metadata) returns (uint256 agentId)",
-  "function testDelegation(address testContract, string calldata message) external",
-  "function getVersion(address registry) external view returns (string memory version)",
-  "function getVersion(address registry) external",
-  "event TestVersion(address indexed caller, address indexed registry, string version)",
   "struct MetadataEntry { string key; bytes value; }",
-]);
-
-const testContractAbi = parseAbi([
-  "function testLog(string calldata message) external",
-  "function testLogWithRegistry(address registry, string calldata message) external",
-  "event TestLog(address indexed caller, string message, uint256 timestamp)",
+  "function giveFeedback(address registry, uint256 agentId, uint8 score, bytes32 tag1, bytes32 tag2, string calldata fileuri, bytes32 filehash, bytes memory feedbackAuth)",
 ]);
 
 // Validate required environment variables
@@ -376,6 +375,7 @@ const generateClientFeedbackAuth = async (
   agentId: string,
   clientAddress: Address,
   network: string,
+  agentUrl?: string,
 ): Promise<GenerateFeedbackAuthResult> => {
   if (!RPC_URL || !ERC8004_IDENTITY_REGISTRY_ADDRESS) {
     return {
@@ -401,8 +401,6 @@ const generateClientFeedbackAuth = async (
 
   try {
     const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
-    const account = privateKeyToAccount(FACILITATOR_PRIVATE_KEY as `0x${string}`);
-    const facilitatorAddress = account.address;
 
     // Get the actual chain ID from the blockchain
     const actualChainId = await publicClient.getChainId();
@@ -416,26 +414,20 @@ const generateClientFeedbackAuth = async (
         functionName: "ownerOf",
         args: [agentIdBigInt],
       });
-
-      // Verify ownership
-      if (owner.toLowerCase() !== facilitatorAddress.toLowerCase()) {
-        return {
-          success: false,
-          error: `Agent ${agentId} exists but belongs to different owner: ${owner}`,
-        };
-      }
-
       // Agent exists and belongs to facilitator - generate feedbackAuth
       console.log(
-        `ERC-8004: Agent ${agentId} exists and belongs to facilitator, generating feedbackAuth`,
+        `ERC-8004: Agent ${agentId} exists and belongs to ${owner}, generating feedbackAuth`,
       );
 
       const feedbackAuth = await generateFeedbackAuth(
         agentId,
         clientAddress,
-        facilitatorAddress,
+        owner,
         FACILITATOR_PRIVATE_KEY as `0x${string}`,
         actualChainId,
+        undefined, // expiry
+        undefined, // indexLimit
+        agentUrl, // agentUrl
       );
 
       // Store feedbackAuth and agentId
@@ -447,6 +439,8 @@ const generateClientFeedbackAuth = async (
       console.log(
         `📝 Stored feedbackAuth and agentId (${agentId}) for client address: ${clientAddress}`,
       );
+
+      console.log(`FeedbackAuth: ${feedbackAuth}`);
 
       return {
         success: true,
@@ -499,11 +493,32 @@ const facilitator = new x402Facilitator()
     // Get network from payment requirements
     const network = paymentPayload.accepted?.network || "base-sepolia";
 
+    // Get agent URL from resource and feedbackAuthEndpoint from extensions
+    const resourceUrl = paymentPayload.resource?.url;
+    const feedbackAuthEndpoint =
+      (registerInfo as { feedbackAuthEndpoint?: string })?.feedbackAuthEndpoint ||
+      "/signFeedbackAuth";
+
+    // Extract host from resource URL and construct full endpoint URL
+    let agentUrl: string | undefined;
+    if (resourceUrl) {
+      try {
+        const url = new URL(resourceUrl);
+        agentUrl = `${url.origin}${feedbackAuthEndpoint}`;
+      } catch {
+        // If resourceUrl is not a valid URL, use it as-is
+        agentUrl = resourceUrl.endsWith("/")
+          ? `${resourceUrl}${feedbackAuthEndpoint.slice(1)}`
+          : `${resourceUrl}${feedbackAuthEndpoint}`;
+      }
+    }
+
     // Generate feedbackAuth for v2
     const result = await generateClientFeedbackAuth(
       registerInfo.agentId,
       clientAddress as Address,
       network,
+      agentUrl,
     );
 
     if (result.success) {
@@ -657,10 +672,13 @@ app.post("/settle", async (req, res) => {
           if (agentId) {
             console.log(`📋 Found v1 agentId ${agentId} for agentAddress ${payTo}`);
 
+            // For v1, we don't have resource URL in the context, so pass undefined
+            // The helper will fall back to AGENT_SERVER_URL env var if available
             const feedbackResult = await generateClientFeedbackAuth(
               agentId,
               clientAddress as Address,
               network,
+              undefined, // agentUrl - not available in v1 context
             );
 
             if (feedbackResult.success && feedbackResult.feedbackAuth) {
@@ -879,6 +897,203 @@ app.get("/getFeedbackAuth", (req, res) => {
 });
 
 /**
+ * POST /feedback
+ * Submit feedback to the reputation registry on behalf of a client using EIP-7702 authorization
+ */
+app.post("/feedback", async (req, res) => {
+  try {
+    const {
+      clientAddress,
+      score,
+      tag1,
+      tag2,
+      fileuri,
+      filehash,
+      network = "base-sepolia",
+      authorization,
+    } = req.body;
+
+    if (!clientAddress) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required field: clientAddress",
+      });
+    }
+
+    if (!authorization) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required field: authorization (EIP-7702)",
+      });
+    }
+
+    if (score === undefined || score === null) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required field: score",
+      });
+    }
+
+    // Validate score range
+    const scoreNum = Number(score);
+    if (scoreNum < 0 || scoreNum > 100) {
+      return res.status(400).json({
+        success: false,
+        error: "Score must be between 0 and 100",
+      });
+    }
+
+    // Fetch feedbackAuth from store
+    const storedData = feedbackAuthStore.get(clientAddress.toLowerCase());
+    if (!storedData) {
+      return res.status(404).json({
+        success: false,
+        error: "FeedbackAuth not found for the given client address",
+      });
+    }
+
+    const { agentId, feedbackAuth } = storedData;
+
+    // Validate required environment variables
+    if (!ERC8004_REPUTATION_REGISTRY_ADDRESS) {
+      return res.status(500).json({
+        success: false,
+        error: "ERC8004_REPUTATION_REGISTRY_ADDRESS not configured",
+      });
+    }
+
+    if (!DELEGATE_CONTRACT_ADDRESS) {
+      return res.status(500).json({
+        success: false,
+        error: "DELEGATE_CONTRACT_ADDRESS not configured",
+      });
+    }
+
+    if (!RPC_URL) {
+      return res.status(500).json({
+        success: false,
+        error: "RPC_URL not configured",
+      });
+    }
+
+    if (!FACILITATOR_PRIVATE_KEY) {
+      return res.status(500).json({
+        success: false,
+        error: "FACILITATOR_PRIVATE_KEY not configured (required for EIP-7702)",
+      });
+    }
+
+    // Get chain for network
+    const chain = mapX402NetworkToChain(network, RPC_URL);
+    if (!chain) {
+      return res.status(400).json({
+        success: false,
+        error: `Unsupported network: ${network}`,
+      });
+    }
+
+    // Create clients
+    const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
+
+    // Convert parameters to proper types
+    const agentIdBigInt = BigInt(agentId);
+    const tag1Bytes32 = tag1
+      ? tag1.startsWith("0x")
+        ? (tag1 as `0x${string}`)
+        : (`0x${tag1.padStart(64, "0")}` as `0x${string}`)
+      : ("0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`);
+    const tag2Bytes32 = tag2
+      ? tag2.startsWith("0x")
+        ? (tag2 as `0x${string}`)
+        : (`0x${tag2.padStart(64, "0")}` as `0x${string}`)
+      : ("0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`);
+    const fileuriStr = fileuri || "";
+    const filehashBytes32 = filehash
+      ? filehash.startsWith("0x")
+        ? (filehash as `0x${string}`)
+        : (`0x${filehash.padStart(64, "0")}` as `0x${string}`)
+      : ("0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`);
+    const feedbackAuthBytes = feedbackAuth.startsWith("0x")
+      ? (feedbackAuth as `0x${string}`)
+      : (`0x${feedbackAuth}` as `0x${string}`);
+
+    console.log(`📝 Submitting feedback for agent ${agentId} from client ${clientAddress}...`);
+    console.log(`   - Score: ${scoreNum}`);
+    console.log(`   - Network: ${network}`);
+
+    // Deserialize authorization
+    const deserializedAuthorization = {
+      chainId: BigInt((authorization as any).chainId),
+      address: (authorization as any).address as Address,
+      nonce: BigInt((authorization as any).nonce),
+      yParity: (authorization as any).yParity as 0 | 1,
+      r: (authorization as any).r as `0x${string}`,
+      s: (authorization as any).s as `0x${string}`,
+    } as unknown as Authorization;
+
+    // Verify authorization matches expected delegate address
+    const expectedDelegateAddress = DELEGATE_CONTRACT_ADDRESS;
+    if (deserializedAuthorization.address.toLowerCase() !== expectedDelegateAddress.toLowerCase()) {
+      return res.status(400).json({
+        success: false,
+        error: `Authorization address mismatch. Expected: ${expectedDelegateAddress}, Got: ${deserializedAuthorization.address}`,
+      });
+    }
+
+    // Encode the giveFeedback function call
+    const data = encodeFunctionData({
+      abi: delegateContractAbi,
+      functionName: "giveFeedback",
+      args: [
+        ERC8004_REPUTATION_REGISTRY_ADDRESS,
+        agentIdBigInt,
+        scoreNum,
+        tag1Bytes32,
+        tag2Bytes32,
+        fileuriStr,
+        filehashBytes32,
+        feedbackAuthBytes,
+      ],
+    });
+
+    // Create wallet client with facilitator's account
+    const account = privateKeyToAccount(FACILITATOR_PRIVATE_KEY as `0x${string}`);
+    const walletClient = createWalletClient({ account, chain, transport: http(RPC_URL) });
+
+    console.log(`📤 Sending EIP-7702 transaction with authorization...`);
+    console.log(`   - Client Address: ${clientAddress}`);
+    console.log(`   - Delegate Contract: ${deserializedAuthorization.address}`);
+
+    // Send EIP-7702 transaction
+    const hash = await walletClient.sendTransaction({
+      authorizationList: [deserializedAuthorization],
+      data,
+      to: clientAddress as Address, // The client's EOA that's being delegated
+    });
+
+    console.log(`✅ Feedback transaction submitted: ${hash}`);
+
+    // Wait for transaction receipt
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    console.log(`✅ Feedback transaction confirmed in block: ${receipt.blockNumber}`);
+
+    res.json({
+      success: true,
+      txHash: hash,
+      blockNumber: receipt.blockNumber.toString(),
+      agentId,
+      clientAddress,
+    });
+  } catch (error) {
+    console.error("Feedback submission error:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+});
+
+/**
  * POST /close
  * Graceful shutdown endpoint
  */
@@ -908,6 +1123,8 @@ app.listen(parseInt(PORT), () => {
 ║  • POST /settle              (settle payment)         ║
 ║  • GET  /supported           (get supported kinds)    ║
 ║  • GET  /health              (health check)           ║
+║  • GET  /getFeedbackAuth     (get feedback auth)      ║
+║  • POST /feedback            (submit feedback)        ║
 ║  • POST /close               (shutdown server)        ║
 ╚════════════════════════════════════════════════════════╝
   `);
@@ -925,6 +1142,7 @@ async function generateFeedbackAuth(
   chainId: number,
   expiry?: bigint,
   indexLimit: bigint = 1000n,
+  agentUrl?: string,
 ): Promise<`0x${string}`> {
   if (!ERC8004_IDENTITY_REGISTRY_ADDRESS) {
     throw new Error("ERC8004_IDENTITY_REGISTRY_ADDRESS not configured");
@@ -962,9 +1180,64 @@ async function generateFeedbackAuth(
     encodePacked(["string", "bytes32"], ["\x19Ethereum Signed Message:\n32", structHash]),
   );
 
-  // Sign the EIP-191 hash
-  const account = privateKeyToAccount(agentOwnerPrivateKey);
-  const signature = await account.sign({ hash: eip191Hash });
+  // Sign the EIP-191 hash via the agent server's /signFeedbackAuth endpoint
+  // Use agentUrl from context if provided, otherwise fall back to AGENT_SERVER_URL env var
+  const serverUrl = agentUrl || AGENT_SERVER_URL;
+  let signature: `0x${string}`;
+  if (serverUrl) {
+    try {
+      // Extract base URL from agentUrl (remove path if present)
+      let baseUrl: string;
+      if (agentUrl) {
+        try {
+          const url = new URL(agentUrl);
+          baseUrl = url.origin; // Extract just the origin (protocol + host + port)
+        } catch {
+          // If agentUrl is not a valid URL, use it as-is (might be just a hostname)
+          baseUrl = agentUrl;
+        }
+      } else {
+        baseUrl = serverUrl;
+      }
+      console.log(`📤 Requesting signature from agent server: ${baseUrl}/signFeedbackAuth`);
+      const signResponse = await fetch(`${baseUrl}/signFeedbackAuth`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          hash: eip191Hash,
+        }),
+      });
+
+      if (!signResponse.ok) {
+        const errorData = await signResponse.json().catch(() => ({ error: "Unknown error" }));
+        throw new Error(
+          `Failed to get signature from agent server: ${errorData.error || signResponse.statusText}`,
+        );
+      }
+
+      const signResult = await signResponse.json();
+      if (!signResult.success || !signResult.signature) {
+        throw new Error(
+          `Agent server returned unsuccessful response: ${signResult.error || "No signature"}`,
+        );
+      }
+
+      signature = signResult.signature as `0x${string}`;
+      console.log(`✅ Received signature from agent server`);
+    } catch (error) {
+      console.error(`❌ Failed to get signature from agent server: ${error}`);
+      // Fallback to local signing if server is unavailable
+      console.log(`⚠️ Falling back to local signing with provided private key`);
+      const account = privateKeyToAccount(agentOwnerPrivateKey);
+      signature = await account.sign({ hash: eip191Hash });
+    }
+  } else {
+    // No agent server URL configured, use local signing
+    const account = privateKeyToAccount(agentOwnerPrivateKey);
+    signature = await account.sign({ hash: eip191Hash });
+  }
 
   // Encode: [struct bytes][signature (65 bytes: r=32, s=32, v=1)]
   const feedbackAuth = (feedbackAuthStruct + signature.slice(2)) as `0x${string}`;

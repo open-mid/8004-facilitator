@@ -10,11 +10,6 @@ import "../lib/openzeppelin-contracts/contracts/token/ERC721/IERC721Receiver.sol
  * and msg.sender will be the EOA, not this contract
  */
 
-interface ITestContract {
-    function testLog(string calldata message) external;
-    function testLogWithRegistry(address registry, string calldata message) external;
-}
-
 interface IIdentityRegistry {
     struct MetadataEntry {
         string key;
@@ -24,6 +19,11 @@ interface IIdentityRegistry {
     function register() external returns (uint256 agentId);
     function register(string memory tokenUri) external returns (uint256 agentId);
     function register(string memory tokenUri, MetadataEntry[] memory metadata) external returns (uint256 agentId);
+}
+
+interface IReputationRegistry {
+    function giveFeedback(uint256 agentId, uint8 score, bytes32 tag1, bytes32 tag2, string calldata fileuri, bytes32 filehash, bytes memory feedbackAuth) external;
+    function getIdentityRegistry() external view returns (address);
 }
 
 contract AgentRegistrationDelegate {
@@ -83,6 +83,10 @@ contract AgentRegistrationDelegate {
 
     function onERC721Received(address /* operator */, address /* from */, uint256 /* tokenId */, bytes calldata /* data */) external pure returns (bytes4) {
         return IERC721Receiver.onERC721Received.selector;
+    }
+
+    function giveFeedback(address registry, uint256 agentId, uint8 score, bytes32 tag1, bytes32 tag2, string calldata fileuri, bytes32 filehash, bytes memory feedbackAuth) external {
+        IReputationRegistry(registry).giveFeedback(agentId, score, tag1, tag2, fileuri, filehash, feedbackAuth);
     }
 }
 

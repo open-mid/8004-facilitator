@@ -14,7 +14,7 @@ import type {
   VerifyResponse,
   SettleResponse,
 } from "@x402/core/types";
-import { ExactEvmFacilitator, toFacilitatorEvmSigner } from "@x402/evm";
+import { ExactEvmFacilitator, toFacilitatorEvmSigner } from "../x402/typescript/packages/mechanisms/evm/dist/cjs";
 import {
   createPublicClient,
   createWalletClient,
@@ -221,7 +221,7 @@ app.post("/verify", async (req, res) => {
       return res.json(response);
     } else if (x402Version === 2) {
       // Use current facilitator verify for v2
-      console.log("Using x402 v2 for x402Version 2");
+      console.log("Using x402 v2 for verify");
 
       const response: VerifyResponse = await facilitator.verify(
         paymentPayload as PaymentPayload,
@@ -338,7 +338,7 @@ app.post("/settle", async (req, res) => {
       return res.json(response);
     } else if (x402Version === 2) {
       // Use current facilitator settle for v2
-      console.log("Using x402 v2 for x402Version 2");
+      console.log("Using x402 v2 for settle");
 
       // Hooks will automatically:
       // - Validate payment was verified (onBeforeSettle - will abort if not)

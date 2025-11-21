@@ -11,8 +11,9 @@ WORKDIR /app
 RUN git clone --depth 1 --branch v2-development https://github.com/coinbase/x402.git x402 && \
     cd x402/typescript && \
     pnpm install && \
-    pnpm turbo run build --filter=@x402/core --filter=@x402/evm --filter=x402 && \
-    cd ../..
+    pnpm turbo run build --filter=@x402/core --filter=@x402/evm && \
+    cd packages/legacy/x402 && pnpm build && \
+    cd ../../../../..
 
 
 # Create facilitator directory (so file:../x402 paths work correctly)

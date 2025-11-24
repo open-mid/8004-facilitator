@@ -1,3 +1,7 @@
+// ============================================================================
+// Imports
+// ============================================================================
+
 import express from "express";
 import { x402Facilitator } from "@x402/core/facilitator";
 // Import legacy verify/settle functions - using file path since @x402/legacy points to the legacy directory
@@ -16,41 +20,26 @@ import type {
 } from "@x402/core/types";
 import { registerExactEvmScheme } from "@x402/evm/exact/facilitator";
 import { toFacilitatorEvmSigner } from "@x402/evm";
-import {
-  createPublicClient,
-  createWalletClient,
-  http,
-  publicActions,
-  encodeFunctionData,
-  type Address,
-  type Authorization,
-} from "viem";
+import { createWalletClient, http, publicActions, type Address, type Authorization } from "viem";
 import { baseSepolia } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 
 // Import config
-import {
-  RPC_URL,
-  ERC8004_REPUTATION_REGISTRY_ADDRESS,
-  DELEGATE_CONTRACT_ADDRESS,
-  PORT,
-  FACILITATOR_PRIVATE_KEY,
-} from "./src/config/env";
-import { delegateContractAbi } from "./src/config/contracts";
+import { RPC_URL, PORT, FACILITATOR_PRIVATE_KEY } from "./src/config/env";
 
 // Import utils
 import { mapX402NetworkToChain } from "./src/utils/network";
 
 // Import services
-import { registerAgent, type RegisterInfo } from "./src/services/registerService";
+import { registerAgent } from "./src/services/registerService";
 import { generateClientFeedbackAuth } from "./src/services/feedbackService";
 
-const app = express();
-app.use(express.json());
+// ============================================================================
+// Configuration & Initialization
+// ============================================================================
 
 // Initialize the EVM account from private key
 const evmAccount = privateKeyToAccount(FACILITATOR_PRIVATE_KEY as `0x${string}`);
-
 console.log("facilitator address:", evmAccount.address);
 
 // Create a Viem client with both wallet and public capabilities
@@ -60,7 +49,7 @@ const viemClient = createWalletClient({
   transport: http(),
 }).extend(publicActions);
 
-// Initialize the x402 Facilitator with EVM and SVM support
+// Initialize the x402 Facilitator with EVM support
 const evmSigner = toFacilitatorEvmSigner({
   readContract: (args: {
     address: `0x${string}`;
@@ -94,17 +83,24 @@ const evmSigner = toFacilitatorEvmSigner({
     viemClient.waitForTransactionReceipt(args),
 });
 
+// Initialize facilitator and register schemes
+const facilitator = new x402Facilitator();
+registerExactEvmScheme(facilitator, { signer: evmSigner });
+
+// ============================================================================
+// Data Stores
+// ============================================================================
+
 // Store client address -> { agentId, feedbackAuth } mapping (for v2)
 const feedbackAuthStore = new Map<string, { agentId: string; feedbackAuth: string }>();
 // Store agent address -> agentId mapping (for v1)
 const agentAddressStore = new Map<string, string>();
 
-const facilitator = new x402Facilitator();
+// ============================================================================
+// Extension Setup
+// ============================================================================
 
-registerExactEvmScheme(facilitator, { signer: evmSigner });
-// .registerScheme("eip155:*", new ExactEvmFacilitator(evmSigner))
-// .registerSchemeV1("base-sepolia" as `${string}:${string}`, new ExactEvmFacilitator(evmSigner))
-
+// Register feedback extension with lifecycle hooks
 facilitator.registerExtension("feedback").onAfterSettle(async context => {
   // This hook only handles v2 payments (v1 is handled directly in /settle endpoint)
   const paymentPayload = context.paymentPayload;
@@ -163,6 +159,17 @@ facilitator.registerExtension("feedback").onAfterSettle(async context => {
     console.error(`❌ Failed to generate feedbackAuth for v2: ${result.error}`);
   }
 });
+
+// ============================================================================
+// Express App Setup
+// ============================================================================
+
+const app = express();
+app.use(express.json());
+
+// ============================================================================
+// Routes
+// ============================================================================
 
 /**
  * POST /verify
@@ -447,175 +454,6 @@ app.get("/health", (req, res) => {
 });
 
 /**
- * POST /feedback
- * Submit feedback to the reputation registry on behalf of a client using EIP-7702 authorization
- */
-app.post("/feedback", async (req, res) => {
-  try {
-    const {
-      clientAddress,
-      score,
-      tag1,
-      tag2,
-      fileuri,
-      filehash,
-      network = "base-sepolia",
-      authorization,
-    } = req.body;
-
-    if (!clientAddress) {
-      return res.status(400).json({
-        success: false,
-        error: "Missing required field: clientAddress",
-      });
-    }
-
-    if (!authorization) {
-      return res.status(400).json({
-        success: false,
-        error: "Missing required field: authorization (EIP-7702)",
-      });
-    }
-
-    if (score === undefined || score === null) {
-      return res.status(400).json({
-        success: false,
-        error: "Missing required field: score",
-      });
-    }
-
-    // Validate score range
-    const scoreNum = Number(score);
-    if (scoreNum < 0 || scoreNum > 100) {
-      return res.status(400).json({
-        success: false,
-        error: "Score must be between 0 and 100",
-      });
-    }
-
-    // Fetch feedbackAuth from store
-    const storedData = feedbackAuthStore.get(clientAddress.toLowerCase());
-    if (!storedData) {
-      return res.status(404).json({
-        success: false,
-        error: "FeedbackAuth not found for the given client address",
-      });
-    }
-
-    const { agentId, feedbackAuth } = storedData;
-
-    // Get chain for network
-    const chain = mapX402NetworkToChain(network, RPC_URL);
-    if (!chain) {
-      return res.status(400).json({
-        success: false,
-        error: `Unsupported network: ${network}`,
-      });
-    }
-
-    // Create clients
-    const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
-
-    // Convert parameters to proper types
-    const agentIdBigInt = BigInt(agentId);
-    const tag1Bytes32 = tag1
-      ? tag1.startsWith("0x")
-        ? (tag1 as `0x${string}`)
-        : (`0x${tag1.padStart(64, "0")}` as `0x${string}`)
-      : ("0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`);
-    const tag2Bytes32 = tag2
-      ? tag2.startsWith("0x")
-        ? (tag2 as `0x${string}`)
-        : (`0x${tag2.padStart(64, "0")}` as `0x${string}`)
-      : ("0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`);
-    const fileuriStr = fileuri || "";
-    const filehashBytes32 = filehash
-      ? filehash.startsWith("0x")
-        ? (filehash as `0x${string}`)
-        : (`0x${filehash.padStart(64, "0")}` as `0x${string}`)
-      : ("0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`);
-    const feedbackAuthBytes = feedbackAuth.startsWith("0x")
-      ? (feedbackAuth as `0x${string}`)
-      : (`0x${feedbackAuth}` as `0x${string}`);
-
-    console.log(`📝 Submitting feedback for agent ${agentId} from client ${clientAddress}...`);
-    console.log(`   - Score: ${scoreNum}`);
-    console.log(`   - Network: ${network}`);
-
-    // Deserialize authorization
-    const deserializedAuthorization = {
-      chainId: BigInt((authorization as any).chainId),
-      address: (authorization as any).address as Address,
-      nonce: BigInt((authorization as any).nonce),
-      yParity: (authorization as any).yParity as 0 | 1,
-      r: (authorization as any).r as `0x${string}`,
-      s: (authorization as any).s as `0x${string}`,
-    } as unknown as Authorization;
-
-    // Verify authorization matches expected delegate address
-    if (
-      deserializedAuthorization.address.toLowerCase() !== DELEGATE_CONTRACT_ADDRESS.toLowerCase()
-    ) {
-      return res.status(400).json({
-        success: false,
-        error: `Authorization address mismatch. Expected: ${DELEGATE_CONTRACT_ADDRESS}, Got: ${deserializedAuthorization.address}`,
-      });
-    }
-
-    // Encode the giveFeedback function call
-    const data = encodeFunctionData({
-      abi: delegateContractAbi,
-      functionName: "giveFeedback",
-      args: [
-        ERC8004_REPUTATION_REGISTRY_ADDRESS,
-        agentIdBigInt,
-        scoreNum,
-        tag1Bytes32,
-        tag2Bytes32,
-        fileuriStr,
-        filehashBytes32,
-        feedbackAuthBytes,
-      ],
-    });
-
-    // Create wallet client with facilitator's account
-    const account = privateKeyToAccount(FACILITATOR_PRIVATE_KEY as `0x${string}`);
-    const walletClient = createWalletClient({ account, chain, transport: http(RPC_URL) });
-
-    console.log(`📤 Sending EIP-7702 transaction with authorization...`);
-    console.log(`   - Client Address: ${clientAddress}`);
-    console.log(`   - Delegate Contract: ${deserializedAuthorization.address}`);
-
-    // Send EIP-7702 transaction
-    const hash = await walletClient.sendTransaction({
-      authorizationList: [deserializedAuthorization],
-      data,
-      to: clientAddress as Address, // The client's EOA that's being delegated
-    });
-
-    console.log(`✅ Feedback transaction submitted: ${hash}`);
-
-    // Wait for transaction receipt
-    const receipt = await publicClient.waitForTransactionReceipt({ hash });
-    console.log(`✅ Feedback transaction confirmed in block: ${receipt.blockNumber}`);
-
-    res.json({
-      success: true,
-      txHash: hash,
-      blockNumber: receipt.blockNumber.toString(),
-      agentId,
-      clientAddress,
-    });
-  } catch (error) {
-    console.error("Feedback submission error:", error);
-    res.status(500).json({
-      success: false,
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
-  }
-});
-
-/**
  * POST /close
  * Graceful shutdown endpoint
  */
@@ -629,7 +467,10 @@ app.post("/close", (req, res) => {
   }, 100);
 });
 
-// Start the server
+// ============================================================================
+// Server Startup
+// ============================================================================
+
 app.listen(parseInt(PORT), () => {
   console.log(`
 ╔════════════════════════════════════════════════════════╗
@@ -643,7 +484,6 @@ app.listen(parseInt(PORT), () => {
 ║  • POST /settle              (settle payment)          ║
 ║  • GET  /supported           (get supported kinds)     ║
 ║  • GET  /health              (health check)            ║
-║  • POST /feedback            (submit feedback)         ║
 ║  • POST /close               (shutdown server)         ║
 ║  • POST /register            (register agent)          ║
 ╚════════════════════════════════════════════════════════╝

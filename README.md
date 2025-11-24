@@ -3,14 +3,14 @@
 A TypeScript facilitator for the x402 payment protocol, supporting both v1 and v2 x402 specifications with ERC-8004 agent registration and feedback capabilities.
 
 **Network**: Base Sepolia  
-**Facilitator URL**: https://facilitator.openmid.xyz  
+**Facilitator URL**: https://facilitator-testnet.openmid.xyz  
 **Delegation Contract**: `0xFdc90fCC6929a2f42a9D714bD10520eEE98bD378`
 
 ## Features
 
 - **Payment Processing**: Verify and settle payments for both x402 v1 and v2
 - **ERC-8004 Integration**: Agent registration via EIP-7702 delegation
-- **Feedback System**: Submit agent feedback using EIP-7702 authorization
+- **Feedback System**: Enables agent signing feedback auth within the x402 payment flow
 
 ## Quick Start
 
@@ -38,7 +38,7 @@ ERC8004_REPUTATION_REGISTRY_ADDRESS=0x...
 DELEGATE_CONTRACT_ADDRESS=0xFdc90fCC6929a2f42a9D714bD10520eEE98bD378
 ```
 
-**Note**: The delegation contract address above is for Base Sepolia. The facilitator is available at https://facilitator.openmid.xyz
+**Note**: The delegation contract address above is for Base Sepolia. The facilitator is available at https://facilitator-testnet.openmid.xyz
 
 ### Run
 
@@ -51,7 +51,6 @@ npm run dev
 - `POST /verify` - Verify a payment
 - `POST /settle` - Settle a payment on-chain
 - `POST /register` - Register an agent with ERC-8004 (EIP-7702)
-- `POST /feedback` - Submit feedback for an agent (EIP-7702)
 - `GET /supported` - Get supported payment schemes
 
 ## Example Server Integrations
@@ -62,6 +61,7 @@ This repository includes example server implementations demonstrating how to int
 - **`examples/v2-server/`** - Example server using x402 v2 specification with `@x402/core` and `@x402/express`
 
 Both examples include:
+
 - Payment-protected resource endpoints
 - Agent registration via EIP-7702
 - Feedback authorization signing endpoints

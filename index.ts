@@ -210,12 +210,6 @@ app.post("/verify", async (req, res) => {
         } as LegacyVerifyResponse);
       }
 
-      // Create public client for legacy verify
-      const publicClient = createPublicClient({
-        chain,
-        transport: http(RPC_URL),
-      });
-
       const response: LegacyVerifyResponse = await legacyVerify(legacyPayload, legacyRequirements);
 
       return res.json(response);

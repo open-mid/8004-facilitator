@@ -9,13 +9,11 @@ function normalizePrivateKey(key: string | undefined): string | undefined {
 }
 
 export const RPC_URL = process.env.RPC_URL as string;
-export const ERC8004_IDENTITY_REGISTRY_ADDRESS = process.env.ERC8004_IDENTITY_REGISTRY_ADDRESS as
-  | `0x${string}`
+export const ERC8004_IDENTITY_REGISTRY_ADDRESS = process.env
+  .ERC8004_IDENTITY_REGISTRY_ADDRESS as `0x${string}`;
 export const ERC8004_REPUTATION_REGISTRY_ADDRESS = process.env
-  .ERC8004_REPUTATION_REGISTRY_ADDRESS as `0x${string}`
-export const DELEGATE_CONTRACT_ADDRESS = process.env.DELEGATE_CONTRACT_ADDRESS as
-  | `0x${string}`
-export const AGENT_SERVER_URL = process.env.AGENT_SERVER_URL as string | undefined;
+  .ERC8004_REPUTATION_REGISTRY_ADDRESS as `0x${string}`;
+export const DELEGATE_CONTRACT_ADDRESS = process.env.DELEGATE_CONTRACT_ADDRESS as `0x${string}`;
 export const PORT = process.env.PORT || "4022";
 
 export const FACILITATOR_PRIVATE_KEY = normalizePrivateKey(process.env.FACILITATOR_PRIVATE_KEY);

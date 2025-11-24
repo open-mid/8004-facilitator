@@ -10,7 +10,6 @@ import { privateKeyToAccount } from "viem/accounts";
 import {
   RPC_URL,
   ERC8004_IDENTITY_REGISTRY_ADDRESS,
-  AGENT_SERVER_URL,
   FACILITATOR_PRIVATE_KEY,
 } from "../config/env";
 import { identityRegistryAbi } from "../config/contracts";
@@ -73,23 +72,18 @@ async function generateFeedbackAuth(
   );
 
   // Sign the EIP-191 hash via the agent server's /signFeedbackAuth endpoint
-  // Use agentUrl from context if provided, otherwise fall back to AGENT_SERVER_URL env var
-  const serverUrl = agentUrl || AGENT_SERVER_URL;
+  // Use agentUrl from context if provided, otherwise use local signing
   let signature: `0x${string}`;
-  if (serverUrl) {
+  if (agentUrl) {
     try {
       // Extract base URL from agentUrl (remove path if present)
       let baseUrl: string;
-      if (agentUrl) {
-        try {
-          const url = new URL(agentUrl);
-          baseUrl = url.origin; // Extract just the origin (protocol + host + port)
-        } catch {
-          // If agentUrl is not a valid URL, use it as-is (might be just a hostname)
-          baseUrl = agentUrl;
-        }
-      } else {
-        baseUrl = serverUrl;
+      try {
+        const url = new URL(agentUrl);
+        baseUrl = url.origin; // Extract just the origin (protocol + host + port)
+      } catch {
+        // Throw
+        throw new Error(`Invalid agent URL: ${agentUrl}`);
       }
       console.log(`📤 Requesting signature from agent server: ${baseUrl}/signFeedbackAuth`);
       const signResponse = await fetch(`${baseUrl}/signFeedbackAuth`, {

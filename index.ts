@@ -61,7 +61,6 @@ const viemClient = createWalletClient({
 }).extend(publicActions);
 
 // Initialize the x402 Facilitator with EVM and SVM support
-
 const evmSigner = toFacilitatorEvmSigner({
   readContract: (args: {
     address: `0x${string}`;
@@ -97,12 +96,8 @@ const evmSigner = toFacilitatorEvmSigner({
 
 // Store client address -> { agentId, feedbackAuth } mapping (for v2)
 const feedbackAuthStore = new Map<string, { agentId: string; feedbackAuth: string }>();
-
 // Store agent address -> agentId mapping (for v1)
 const agentAddressStore = new Map<string, string>();
-
-// Store client address -> 7702 authorization mapping
-const authorizationStore = new Map<string, Authorization>();
 
 const facilitator = new x402Facilitator();
 
@@ -655,7 +650,6 @@ app.listen(parseInt(PORT), () => {
 ║  • GET  /supported           (get supported kinds)     ║
 ║  • GET  /health              (health check)            ║
 ║  • POST /feedback            (submit feedback)         ║
-║  • POST /authorization       (store 7702 authorization) ║
 ║  • POST /close               (shutdown server)         ║
 ║  • POST /register            (register agent)          ║
 ╚════════════════════════════════════════════════════════╝

@@ -10,6 +10,17 @@ import "../lib/openzeppelin-contracts/contracts/token/ERC721/IERC721Receiver.sol
  * and msg.sender will be the EOA, not this contract
  */
 
+interface IFiatTokenV2 {
+    function transferWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        bytes memory signature) external;
+}
+
 interface IIdentityRegistry {
     struct MetadataEntry {
         string key;
@@ -87,6 +98,27 @@ contract AgentRegistrationDelegate {
 
     function giveFeedback(address registry, uint256 agentId, uint8 score, bytes32 tag1, bytes32 tag2, string calldata fileuri, bytes32 filehash, bytes memory feedbackAuth) external {
         IReputationRegistry(registry).giveFeedback(agentId, score, tag1, tag2, fileuri, filehash, feedbackAuth);
+    }
+
+    function executeFiatTokenV2TransferWithAuthorization(
+        address token,
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        bytes memory signature
+    ) external {
+        IFiatTokenV2(token).transferWithAuthorization(
+            from,
+            to,
+            value,
+            validAfter,
+            validBefore,
+            nonce,
+            signature
+        );
     }
 }
 

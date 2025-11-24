@@ -14,7 +14,8 @@ import type {
   VerifyResponse,
   SettleResponse,
 } from "@x402/core/types";
-import { ExactEvmFacilitator, toFacilitatorEvmSigner } from "../x402/typescript/packages/mechanisms/evm/dist/cjs";
+import { registerExactEvmScheme } from "@x402/evm/exact/facilitator";
+import { toFacilitatorEvmSigner } from "@x402/evm";
 import {
   createPublicClient,
   createWalletClient,
@@ -50,6 +51,8 @@ app.use(express.json());
 // Initialize the EVM account from private key
 const evmAccount = privateKeyToAccount(FACILITATOR_PRIVATE_KEY as `0x${string}`);
 
+console.log("facilitator address:", evmAccount.address);
+
 // Create a Viem client with both wallet and public capabilities
 const viemClient = createWalletClient({
   account: evmAccount,
@@ -58,7 +61,6 @@ const viemClient = createWalletClient({
 }).extend(publicActions);
 
 // Initialize the x402 Facilitator with EVM and SVM support
-
 const evmSigner = toFacilitatorEvmSigner({
   readContract: (args: {
     address: `0x${string}`;
@@ -94,75 +96,73 @@ const evmSigner = toFacilitatorEvmSigner({
 
 // Store client address -> { agentId, feedbackAuth } mapping (for v2)
 const feedbackAuthStore = new Map<string, { agentId: string; feedbackAuth: string }>();
-
 // Store agent address -> agentId mapping (for v1)
 const agentAddressStore = new Map<string, string>();
 
-const facilitator = new x402Facilitator()
-  .registerScheme("eip155:*", new ExactEvmFacilitator(evmSigner))
-  .registerSchemeV1("base-sepolia" as `${string}:${string}`, new ExactEvmFacilitator(evmSigner))
-  .onAfterSettle(async context => {
-    // This hook only handles v2 payments (v1 is handled directly in /settle endpoint)
-    const paymentPayload = context.paymentPayload;
-    const extensions = paymentPayload.extensions;
+const facilitator = new x402Facilitator();
 
-    // Extract register extension data
-    const registerInfo = extensions?.register as
-      | { agentId?: string; feedbackEnabled?: boolean }
-      | undefined;
+registerExactEvmScheme(facilitator, { signer: evmSigner });
+// .registerScheme("eip155:*", new ExactEvmFacilitator(evmSigner))
+// .registerSchemeV1("base-sepolia" as `${string}:${string}`, new ExactEvmFacilitator(evmSigner))
 
-    // For v2, use agentId from registerInfo if feedbackEnabled is true
-    if (!registerInfo || !registerInfo.agentId || !registerInfo.feedbackEnabled) {
-      // No feedback enabled for v2, skip
-      return;
+facilitator.registerExtension("feedback").onAfterSettle(async context => {
+  // This hook only handles v2 payments (v1 is handled directly in /settle endpoint)
+  const paymentPayload = context.paymentPayload;
+  const extensions = paymentPayload.extensions;
+
+  // Extract register extension data
+  const registerInfo = extensions?.feedback as
+    | { agentId?: string; feedbackEnabled?: boolean }
+    | undefined;
+
+  // For v2, use agentId from registerInfo if feedbackEnabled is true
+  if (!registerInfo || !registerInfo.agentId || !registerInfo.feedbackEnabled) {
+    // No feedback enabled for v2, skip
+    return;
+  }
+
+  // Get client address from payment payload (the payer)
+  const clientAddress = (paymentPayload.payload as any)?.authorization?.from;
+
+  if (!clientAddress) {
+    console.warn("No client address found in payment payload, skipping feedbackAuth generation");
+    return;
+  }
+
+  // Get network from payment requirements
+  const network = paymentPayload.accepted?.network || "base-sepolia";
+
+  // Get agent URL from resource and feedbackAuthEndpoint from extensions
+  const resourceUrl = paymentPayload.resource?.url;
+  const feedbackAuthEndpoint = (registerInfo as { feedbackAuthEndpoint?: string })
+    ?.feedbackAuthEndpoint;
+
+  // Extract host from resource URL and construct full endpoint URL
+  let agentUrl: string | undefined;
+  if (resourceUrl) {
+    try {
+      const url = new URL(resourceUrl);
+      agentUrl = `${url.origin}${feedbackAuthEndpoint}`;
+    } catch {
+      // nothing
     }
+  }
 
-    // Get client address from payment payload (the payer)
-    const clientAddress = (paymentPayload.payload as any)?.authorization?.from;
+  // Generate feedbackAuth for v2
+  const result = await generateClientFeedbackAuth(
+    registerInfo.agentId,
+    clientAddress as Address,
+    network,
+    feedbackAuthStore,
+    agentUrl,
+  );
 
-    if (!clientAddress) {
-      console.warn("No client address found in payment payload, skipping feedbackAuth generation");
-      return;
-    }
-
-    // Get network from payment requirements
-    const network = paymentPayload.accepted?.network || "base-sepolia";
-
-    // Get agent URL from resource and feedbackAuthEndpoint from extensions
-    const resourceUrl = paymentPayload.resource?.url;
-    const feedbackAuthEndpoint =
-      (registerInfo as { feedbackAuthEndpoint?: string })?.feedbackAuthEndpoint ||
-      "/signFeedbackAuth";
-
-    // Extract host from resource URL and construct full endpoint URL
-    let agentUrl: string | undefined;
-    if (resourceUrl) {
-      try {
-        const url = new URL(resourceUrl);
-        agentUrl = `${url.origin}${feedbackAuthEndpoint}`;
-      } catch {
-        // If resourceUrl is not a valid URL, use it as-is
-        agentUrl = resourceUrl.endsWith("/")
-          ? `${resourceUrl}${feedbackAuthEndpoint.slice(1)}`
-          : `${resourceUrl}${feedbackAuthEndpoint}`;
-      }
-    }
-
-    // Generate feedbackAuth for v2
-    const result = await generateClientFeedbackAuth(
-      registerInfo.agentId,
-      clientAddress as Address,
-      network,
-      feedbackAuthStore,
-      agentUrl,
-    );
-
-    if (result.success) {
-      console.log(`✅ Generated feedbackAuth for v2 agent ${result.agentId}`);
-    } else {
-      console.error(`❌ Failed to generate feedbackAuth for v2: ${result.error}`);
-    }
-  });
+  if (result.success) {
+    console.log(`✅ Generated feedbackAuth for v2 agent ${result.agentId}`);
+  } else {
+    console.error(`❌ Failed to generate feedbackAuth for v2: ${result.error}`);
+  }
+});
 
 /**
  * POST /verify
@@ -294,46 +294,7 @@ app.post("/settle", async (req, res) => {
       }
 
       const response: LegacySettleResponse = await legacySettle(legacyPayload, legacyRequirements);
-
-      // Generate feedbackAuth for v1 after successful settlement
-      if (response.success) {
-        // Get client address from v1 payment payload
-        const clientAddress = (legacyPayload.payload as any)?.authorization?.from;
-        const payTo = (legacyPayload.payload as any)?.authorization?.to;
-
-        if (clientAddress) {
-          // Fetch agentId from agentAddress mapping
-          const agentId = agentAddressStore.get(payTo.toLowerCase());
-
-          if (agentId) {
-            console.log(`📋 Found v1 agentId ${agentId} for agentAddress ${payTo}`);
-
-            // For v1, we don't have resource URL in the context, so pass undefined
-            // The helper will fall back to AGENT_SERVER_URL env var if available
-            const feedbackResult = await generateClientFeedbackAuth(
-              agentId,
-              clientAddress as Address,
-              network,
-              feedbackAuthStore,
-              undefined, // agentUrl - not available in v1 context
-            );
-
-            if (feedbackResult.success && feedbackResult.feedbackAuth) {
-              console.log(`✅ Generated feedbackAuth for v1 agent ${agentId}`);
-            } else {
-              console.error(`❌ Failed to generate feedbackAuth for v1: ${feedbackResult.error}`);
-            }
-          } else {
-            console.warn(
-              `No agentId found for v1 agentAddress ${payTo}, skipping feedbackAuth generation`,
-            );
-          }
-        } else {
-          console.warn(
-            "No client address found in v1 payment payload, skipping feedbackAuth generation",
-          );
-        }
-      }
+      // TODO: not generating feedbackAuth for v1 after successful settlement
 
       return res.json(response);
     } else if (x402Version === 2) {
@@ -465,7 +426,7 @@ app.get("/supported", async (req, res) => {
           network: "eip155:84532",
         },
       ],
-      extensions: ["register"],
+      extensions: ["feedback"],
     };
     console.log("Returning supported schemes:", response);
     res.json(response);
@@ -681,7 +642,7 @@ app.listen(parseInt(PORT), () => {
 ║           x402 TypeScript Facilitator                  ║
 ╠════════════════════════════════════════════════════════╣
 ║  Network:    eip155:84532                              ║
-║  Extensions: register                                  ║
+║  Extensions: feedback                                  ║
 ║                                                        ║
 ║  Endpoints:                                            ║
 ║  • POST /verify              (verify payment)          ║

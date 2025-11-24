@@ -58,6 +58,7 @@ This repository includes example server implementations demonstrating how to int
 
 - **`examples/v1-server/`** - Example server using x402 v1 specification with legacy `x402-express` middleware
 - **`examples/v2-server/`** - Example server using x402 v2 specification with `@x402/core` and `@x402/express`
+  - **Note**: Requires x402 v2-development branch
 
 Both examples include:
 

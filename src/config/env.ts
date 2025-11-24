@@ -11,8 +11,6 @@ function normalizePrivateKey(key: string | undefined): string | undefined {
 export const RPC_URL = process.env.RPC_URL as string;
 export const ERC8004_IDENTITY_REGISTRY_ADDRESS = process.env
   .ERC8004_IDENTITY_REGISTRY_ADDRESS as `0x${string}`;
-export const ERC8004_REPUTATION_REGISTRY_ADDRESS = process.env
-  .ERC8004_REPUTATION_REGISTRY_ADDRESS as `0x${string}`;
 export const DELEGATE_CONTRACT_ADDRESS = process.env.DELEGATE_CONTRACT_ADDRESS as `0x${string}`;
 export const PORT = process.env.PORT || "4022";
 
@@ -30,11 +28,6 @@ if (!RPC_URL) {
 
 if (!ERC8004_IDENTITY_REGISTRY_ADDRESS) {
   console.error("❌ ERC8004_IDENTITY_REGISTRY_ADDRESS environment variable is required");
-  process.exit(1);
-}
-
-if (!ERC8004_REPUTATION_REGISTRY_ADDRESS) {
-  console.error("❌ ERC8004_REPUTATION_REGISTRY_ADDRESS environment variable is required");
   process.exit(1);
 }
 

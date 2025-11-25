@@ -51,6 +51,7 @@ npm run dev
 - `POST /settle` - Settle a payment on-chain
 - `POST /register` - Register an agent with ERC-8004 (EIP-7702)
 - `GET /supported` - Get supported payment schemes
+- (Release soon after 8004 upgrades) `POST /feedback` - Allow clients to submit feedback for 8004 agents via the facilitator
 
 ## Example Server Integrations
 
@@ -67,3 +68,7 @@ Both examples include:
 - Feedback authorization signing endpoints
 
 See the `examples/` directory for complete working implementations.
+
+## Flow Diagram
+
+![x402 Facilitator Flow](flow.png)

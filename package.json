@@ -2,6 +2,7 @@
   "name": "facilitator-test",
   "version": "1.0.0",
   "description": "Dummy x402 facilitator for testing",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "scripts": {

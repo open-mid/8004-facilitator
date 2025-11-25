@@ -1,6 +1,6 @@
 # x402 8004 Facilitator
 
-A TypeScript facilitator for the x402 payment protocol, supporting both v1 and v2 x402 specifications with ERC-8004 agent registration and feedback capabilities.
+A facilitator acts as the service access point for x402 payments: verifying user requests, settling payments on-chain. This implementation extends that flow with ERC-8004 identity and feedback primitives, enabling fully onchain agent registration and authenticated service evaluation.
 
 **Network**: Base Sepolia  
 **Facilitator URL**: https://facilitator-testnet.openmid.xyz  

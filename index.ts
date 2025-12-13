@@ -92,9 +92,7 @@ registerExactEvmScheme(facilitator, { signer: evmSigner });
 // Data Stores
 // ============================================================================
 
-// Store client address -> { agentId, feedbackAuth } mapping (for v2)
 const feedbackAuthStore = createRedisStore<{ agentId: string; feedbackAuth: string }>(REDIS_URL);
-// Store agent address -> agentId mapping (for v1)
 const agentAddressStore = createRedisStore<string>(REDIS_URL);
 
 // ============================================================================
@@ -162,7 +160,6 @@ const register = async (context: FacilitatorSettleResultContext) => {
     return;
   }
 
-  // store agentAddress -> agentId mapping
   if (result.agentId) {
     await agentAddressStore.set(agentAddress.toLowerCase(), result.agentId);
     console.log(
@@ -173,39 +170,30 @@ const register = async (context: FacilitatorSettleResultContext) => {
 
 // Register feedback extension with lifecycle hooks
 const feedback = async (context: FacilitatorSettleResultContext) => {
-  // This hook only handles v2 payments (v1 is handled directly in /settle endpoint)
   const paymentPayload = context.paymentPayload;
   const extensions = paymentPayload.extensions;
 
-  // Extract register extension data
   const feedbackInfo = extensions?.["erc-8004"] as
     | { feedbackAuthEndpoint?: string; feedbackEnabled?: boolean }
     | undefined;
 
-  // For v2, use agentId from registerInfo if feedbackEnabled is true
   if (!feedbackInfo || !feedbackInfo.feedbackEnabled) {
-    // No feedback enabled for v2, skip
     console.log("No feedback enabled for v2, skipping feedbackAuth generation");
     return;
   }
 
-  // Get client address from payment payload (the payer)
   const clientAddress = (paymentPayload.payload as any)?.authorization?.from;
-
   if (!clientAddress) {
     console.warn("No client address found in payment payload, skipping feedbackAuth generation");
     return;
   }
 
-  // Get network from payment requirements
   const network = paymentPayload.accepted?.network || "base-sepolia";
 
-  // Get agent URL from resource and feedbackAuthEndpoint from extensions
   const resourceUrl = paymentPayload.resource?.url;
   const feedbackAuthEndpoint = (feedbackInfo as { feedbackAuthEndpoint?: string })
     ?.feedbackAuthEndpoint;
 
-  // Extract host from resource URL and construct full endpoint URL
   let agentUrl: string | undefined;
   if (resourceUrl) {
     try {
@@ -223,7 +211,6 @@ const feedback = async (context: FacilitatorSettleResultContext) => {
     return;
   }
 
-  // Generate feedbackAuth for v2
   const result = await generateClientFeedbackAuth(
     agentId,
     clientAddress as Address,
@@ -253,8 +240,6 @@ app.use(express.json());
 /**
  * POST /verify
  * Verify a payment against requirements
- *
- * Note: Payment tracking and bazaar discovery are handled by lifecycle hooks
  */
 app.post("/verify", async (req, res) => {
   try {
@@ -269,11 +254,8 @@ app.post("/verify", async (req, res) => {
       });
     }
 
-    // Check x402Version to determine which verify function to use
     const x402Version = (paymentPayload as any).x402Version;
-
     if (x402Version === 1) {
-      // Use legacy verify for v1
       console.log("Using legacy verify for x402Version 1");
 
       if (!RPC_URL) {
@@ -285,7 +267,6 @@ app.post("/verify", async (req, res) => {
       const legacyPayload = paymentPayload as LegacyPaymentPayload;
       const legacyRequirements = paymentRequirements as LegacyPaymentRequirements;
 
-      // Get network from requirements (v1 format)
       const network = legacyRequirements.network;
       const chain = mapX402NetworkToChain(network, RPC_URL);
 
@@ -300,7 +281,6 @@ app.post("/verify", async (req, res) => {
 
       return res.json(response);
     } else if (x402Version === 2) {
-      // Use current facilitator verify for v2
       console.log("Using x402 v2 for verify");
 
       const response: VerifyResponse = await facilitator.verify(
@@ -341,11 +321,8 @@ app.post("/settle", async (req, res) => {
       });
     }
 
-    // Check x402Version to determine which settle function to use
     const x402Version = (paymentPayload as any).x402Version;
-
     if (x402Version === 1) {
-      // Use legacy settle for v1
       console.log("Using legacy settle for x402Version 1");
 
       if (!RPC_URL || !FACILITATOR_PRIVATE_KEY) {
@@ -378,7 +355,6 @@ app.post("/settle", async (req, res) => {
 
       return res.json(response);
     } else if (x402Version === 2) {
-      // Use current facilitator settle for v2
       console.log("Using x402 v2 for settle");
 
       // Hooks will automatically:
@@ -421,7 +397,6 @@ app.post("/settle", async (req, res) => {
 /**
  * POST /register
  * Register a new agent with ERC-8004
- * COMMENTED OUT FOR TESTING - Use /register-test instead
  */
 app.post("/register", async (req, res) => {
   try {

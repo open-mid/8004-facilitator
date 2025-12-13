@@ -3,7 +3,7 @@
 // ============================================================================
 
 import express from "express";
-import { x402Facilitator } from "@x402/core/facilitator";
+import { x402Facilitator, FacilitatorSettleResultContext } from "@x402/core/facilitator";
 // Import legacy verify/settle functions - using file path since @x402/legacy points to the legacy directory
 import { verify as legacyVerify, settle as legacySettle } from "@x402/legacy/x402/dist/cjs/verify";
 import type {
@@ -25,7 +25,7 @@ import { baseSepolia } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 
 // Import config
-import { RPC_URL, PORT, FACILITATOR_PRIVATE_KEY } from "./src/config/env";
+import { RPC_URL, PORT, FACILITATOR_PRIVATE_KEY, REDIS_URL } from "./src/config/env";
 
 // Import utils
 import { mapX402NetworkToChain } from "./src/utils/network";
@@ -33,6 +33,7 @@ import { mapX402NetworkToChain } from "./src/utils/network";
 // Import services
 import { registerAgent } from "./src/services/registerService";
 import { generateClientFeedbackAuth } from "./src/services/feedbackService";
+import { createRedisStore, type KeyValueStore } from "./src/services/redisStore";
 
 // ============================================================================
 // Configuration & Initialization
@@ -92,28 +93,99 @@ registerExactEvmScheme(facilitator, { signer: evmSigner });
 // ============================================================================
 
 // Store client address -> { agentId, feedbackAuth } mapping (for v2)
-const feedbackAuthStore = new Map<string, { agentId: string; feedbackAuth: string }>();
+const feedbackAuthStore = createRedisStore<{ agentId: string; feedbackAuth: string }>(REDIS_URL);
 // Store agent address -> agentId mapping (for v1)
-const agentAddressStore = new Map<string, string>();
+const agentAddressStore = createRedisStore<string>(REDIS_URL);
 
 // ============================================================================
 // Extension Setup
 // ============================================================================
+facilitator.registerExtension("8004").onAfterSettle(async context => {
+  await register(context);
+  await feedback(context);
+});
+
+const register = async (context: FacilitatorSettleResultContext) => {
+  const paymentPayload = context.paymentPayload;
+  const extensions = paymentPayload.extensions;
+
+  const registeryInfo = extensions?.["erc-8004"] as { registerEndpoint?: string } | undefined;
+  if (!registeryInfo) {
+    return;
+  }
+
+  const agentAddress = (paymentPayload.accepted.payTo as Address).toLowerCase();
+  const agentId = await agentAddressStore.get(agentAddress);
+  if (agentId) {
+    console.log(`✅ Agent ${agentId} already registered, skipping registration`);
+    return;
+  }
+
+  const resourceUrl = paymentPayload.resource?.url;
+  const registerEndpoint = (registeryInfo as { registerEndpoint?: string })?.registerEndpoint;
+
+  console.log(`🔍 Registering agent ${agentAddress} with endpoint ${registerEndpoint}`);
+
+  if (!registerEndpoint) {
+    return;
+  }
+
+  const registerUrl = `${new URL(resourceUrl).origin}${registerEndpoint}`;
+  console.log(`🔍 Register URL: ${registerUrl}`);
+
+  const response = await fetch(registerUrl);
+  const data = await response.json();
+  if (!response.ok) {
+    console.error(`❌ Failed to register agent: ${data.error}`);
+    return;
+  }
+
+  const { tokenURI, metadata, authorization } = data;
+  const deserializedAuthorization = {
+    chainId: BigInt((authorization as any).chainId),
+    address: (authorization as any).address as Address,
+    nonce: BigInt((authorization as any).nonce),
+    yParity: (authorization as any).yParity as 0 | 1,
+    r: (authorization as any).r as `0x${string}`,
+    s: (authorization as any).s as `0x${string}`,
+  } as unknown as Authorization;
+
+  const result = await registerAgent({
+    agentAddress: agentAddress as Address,
+    authorization: deserializedAuthorization,
+    tokenURI,
+    metadata,
+    network: paymentPayload.accepted?.network,
+  });
+
+  if (!result.success) {
+    return;
+  }
+
+  // store agentAddress -> agentId mapping
+  if (result.agentId) {
+    await agentAddressStore.set(agentAddress.toLowerCase(), result.agentId);
+    console.log(
+      `📝 Stored v2 agentAddress (${agentAddress}) -> agentId (${result.agentId}) mapping`,
+    );
+  }
+};
 
 // Register feedback extension with lifecycle hooks
-facilitator.registerExtension("feedback").onAfterSettle(async context => {
+const feedback = async (context: FacilitatorSettleResultContext) => {
   // This hook only handles v2 payments (v1 is handled directly in /settle endpoint)
   const paymentPayload = context.paymentPayload;
   const extensions = paymentPayload.extensions;
 
   // Extract register extension data
-  const registerInfo = extensions?.feedback as
-    | { agentId?: string; feedbackEnabled?: boolean }
+  const feedbackInfo = extensions?.["erc-8004"] as
+    | { feedbackAuthEndpoint?: string; feedbackEnabled?: boolean }
     | undefined;
 
   // For v2, use agentId from registerInfo if feedbackEnabled is true
-  if (!registerInfo || !registerInfo.agentId || !registerInfo.feedbackEnabled) {
+  if (!feedbackInfo || !feedbackInfo.feedbackEnabled) {
     // No feedback enabled for v2, skip
+    console.log("No feedback enabled for v2, skipping feedbackAuth generation");
     return;
   }
 
@@ -130,7 +202,7 @@ facilitator.registerExtension("feedback").onAfterSettle(async context => {
 
   // Get agent URL from resource and feedbackAuthEndpoint from extensions
   const resourceUrl = paymentPayload.resource?.url;
-  const feedbackAuthEndpoint = (registerInfo as { feedbackAuthEndpoint?: string })
+  const feedbackAuthEndpoint = (feedbackInfo as { feedbackAuthEndpoint?: string })
     ?.feedbackAuthEndpoint;
 
   // Extract host from resource URL and construct full endpoint URL
@@ -140,13 +212,20 @@ facilitator.registerExtension("feedback").onAfterSettle(async context => {
       const url = new URL(resourceUrl);
       agentUrl = `${url.origin}${feedbackAuthEndpoint}`;
     } catch {
-      // nothing
+      console.error(`❌ Invalid resource URL: ${resourceUrl}`);
+      return;
     }
+  }
+
+  const agentId = await agentAddressStore.get(clientAddress.toLowerCase());
+  if (!agentId) {
+    console.error(`❌ Agent not found for client address: ${clientAddress}`);
+    return;
   }
 
   // Generate feedbackAuth for v2
   const result = await generateClientFeedbackAuth(
-    registerInfo.agentId,
+    agentId,
     clientAddress as Address,
     network,
     feedbackAuthStore,
@@ -158,7 +237,7 @@ facilitator.registerExtension("feedback").onAfterSettle(async context => {
   } else {
     console.error(`❌ Failed to generate feedbackAuth for v2: ${result.error}`);
   }
-});
+};
 
 // ============================================================================
 // Express App Setup
@@ -394,7 +473,7 @@ app.post("/register", async (req, res) => {
     if (result.success && result.agentId) {
       // For v1, store agentAddress -> agentId mapping
       if (x402Version === 1 && agentAddress) {
-        agentAddressStore.set(agentAddress.toLowerCase(), result.agentId);
+        await agentAddressStore.set(agentAddress.toLowerCase(), result.agentId);
         console.log(
           `📝 Stored v1 agentAddress (${agentAddress}) -> agentId (${result.agentId}) mapping`,
         );

@@ -7,13 +7,10 @@ import {
   type Address,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import {
-  RPC_URL,
-  ERC8004_IDENTITY_REGISTRY_ADDRESS,
-  FACILITATOR_PRIVATE_KEY,
-} from "../config/env";
+import { RPC_URL, ERC8004_IDENTITY_REGISTRY_ADDRESS, FACILITATOR_PRIVATE_KEY } from "../config/env";
 import { identityRegistryAbi } from "../config/contracts";
 import { mapX402NetworkToChain } from "../utils/network";
+import type { KeyValueStore } from "./redisStore";
 
 export type GenerateFeedbackAuthResult = {
   success: boolean;
@@ -138,7 +135,7 @@ export async function generateClientFeedbackAuth(
   agentId: string,
   clientAddress: Address,
   network: string,
-  feedbackAuthStore: Map<string, { agentId: string; feedbackAuth: string }>,
+  feedbackAuthStore: KeyValueStore<{ agentId: string; feedbackAuth: string }>,
   agentUrl?: string,
 ): Promise<GenerateFeedbackAuthResult> {
   const chain = mapX402NetworkToChain(network, RPC_URL);
@@ -180,11 +177,15 @@ export async function generateClientFeedbackAuth(
         agentUrl, // agentUrl
       );
 
-      // Store feedbackAuth and agentId
-      feedbackAuthStore.set(clientAddress.toLowerCase(), {
-        agentId,
-        feedbackAuth,
-      });
+      // Store feedbackAuth and agentId with 1 hour TTL (matches feedbackAuth expiry)
+      await feedbackAuthStore.set(
+        clientAddress.toLowerCase(),
+        {
+          agentId,
+          feedbackAuth,
+        },
+        3600, // 1 hour TTL
+      );
 
       console.log(
         `📝 Stored feedbackAuth and agentId (${agentId}) for client address: ${clientAddress}`,

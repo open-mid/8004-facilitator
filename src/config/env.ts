@@ -13,6 +13,7 @@ export const ERC8004_IDENTITY_REGISTRY_ADDRESS = process.env
   .ERC8004_IDENTITY_REGISTRY_ADDRESS as `0x${string}`;
 export const DELEGATE_CONTRACT_ADDRESS = process.env.DELEGATE_CONTRACT_ADDRESS as `0x${string}`;
 export const PORT = process.env.PORT || "4022";
+export const REDIS_URL = process.env.REDIS_URL
 
 export const FACILITATOR_PRIVATE_KEY = normalizePrivateKey(process.env.FACILITATOR_PRIVATE_KEY);
 

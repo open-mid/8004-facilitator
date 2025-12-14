@@ -16,112 +16,28 @@ import type {
 } from "@x402/core/types";
 import { ExactEvmScheme } from "@x402/evm/exact/facilitator";
 import { ExactEvmSchemeV1 as ExactEvmSchemeV1Facilitator } from "@x402/evm/exact/v1/facilitator";
-import { toFacilitatorEvmSigner } from "@x402/evm";
-import { createWalletClient, http, publicActions, type Address, type Authorization } from "viem";
-import { baseSepolia, base } from "viem/chains";
-import { privateKeyToAccount } from "viem/accounts";
+import type { Address, Authorization } from "viem";
 
 // Import config
 import { RPC_URL, PORT, FACILITATOR_PRIVATE_KEY, REDIS_URL } from "./src/config/env";
 
 // Import utils
 import { mapX402NetworkToChain } from "./src/utils/network";
+import { createFacilitatorSigners } from "./src/utils/signers";
 
 // Import services
 import { registerAgent } from "./src/services/registerService";
 import { generateClientFeedbackAuth } from "./src/services/feedbackService";
-import { createRedisStore, type KeyValueStore } from "./src/services/redisStore";
+import { createRedisStore } from "./src/services/redisStore";
 
 // ============================================================================
 // Configuration & Initialization
 // ============================================================================
 
-// Initialize the EVM account from private key
-const evmAccount = privateKeyToAccount(FACILITATOR_PRIVATE_KEY as `0x${string}`);
+const { evmAccount, baseSepoliaSigner, baseMainnetSigner } = createFacilitatorSigners(
+  FACILITATOR_PRIVATE_KEY as `0x${string}`,
+);
 console.log("facilitator address:", evmAccount.address);
-
-// Create separate Viem clients for Base Sepolia and Base mainnet
-const baseSepoliaClient = createWalletClient({
-  account: evmAccount,
-  chain: baseSepolia,
-  transport: http(),
-}).extend(publicActions);
-
-const baseMainnetClient = createWalletClient({
-  account: evmAccount,
-  chain: base,
-  transport: http(),
-}).extend(publicActions);
-
-// Create signer for Base Sepolia
-const baseSepoliaSigner = toFacilitatorEvmSigner({
-  address: evmAccount.address,
-  readContract: (args: {
-    address: `0x${string}`;
-    abi: readonly unknown[];
-    functionName: string;
-    args?: readonly unknown[];
-  }) =>
-    baseSepoliaClient.readContract({
-      ...args,
-      args: args.args || [],
-    }),
-  verifyTypedData: (args: {
-    address: `0x${string}`;
-    domain: Record<string, unknown>;
-    types: Record<string, unknown>;
-    primaryType: string;
-    message: Record<string, unknown>;
-    signature: `0x${string}`;
-  }) => baseSepoliaClient.verifyTypedData(args as any),
-  writeContract: (args: {
-    address: `0x${string}`;
-    abi: readonly unknown[];
-    functionName: string;
-    args: readonly unknown[];
-  }) =>
-    baseSepoliaClient.writeContract({
-      ...args,
-      args: args.args || [],
-    }),
-  waitForTransactionReceipt: (args: { hash: `0x${string}` }) =>
-    baseSepoliaClient.waitForTransactionReceipt(args),
-});
-
-// Create signer for Base mainnet
-const baseMainnetSigner = toFacilitatorEvmSigner({
-  address: evmAccount.address,
-  readContract: (args: {
-    address: `0x${string}`;
-    abi: readonly unknown[];
-    functionName: string;
-    args?: readonly unknown[];
-  }) =>
-    baseMainnetClient.readContract({
-      ...args,
-      args: args.args || [],
-    }),
-  verifyTypedData: (args: {
-    address: `0x${string}`;
-    domain: Record<string, unknown>;
-    types: Record<string, unknown>;
-    primaryType: string;
-    message: Record<string, unknown>;
-    signature: `0x${string}`;
-  }) => baseMainnetClient.verifyTypedData(args as any),
-  writeContract: (args: {
-    address: `0x${string}`;
-    abi: readonly unknown[];
-    functionName: string;
-    args: readonly unknown[];
-  }) =>
-    baseMainnetClient.writeContract({
-      ...args,
-      args: args.args || [],
-    }),
-  waitForTransactionReceipt: (args: { hash: `0x${string}` }) =>
-    baseMainnetClient.waitForTransactionReceipt(args),
-});
 
 const facilitator = new x402Facilitator();
 

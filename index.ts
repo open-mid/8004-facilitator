@@ -52,6 +52,7 @@ const viemClient = createWalletClient({
 
 // Initialize the x402 Facilitator with EVM support
 const evmSigner = toFacilitatorEvmSigner({
+  address: evmAccount.address,
   readContract: (args: {
     address: `0x${string}`;
     abi: readonly unknown[];
@@ -86,7 +87,10 @@ const evmSigner = toFacilitatorEvmSigner({
 
 // Initialize facilitator and register schemes
 const facilitator = new x402Facilitator();
-registerExactEvmScheme(facilitator, { signer: evmSigner });
+registerExactEvmScheme(facilitator, {
+  signer: evmSigner,
+  networks: ["eip155:84532", "eip155:8453"],
+});
 
 // ============================================================================
 // Data Stores

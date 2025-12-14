@@ -1,7 +1,3 @@
-// ============================================================================
-// Imports
-// ============================================================================
-
 import express from "express";
 import { x402Facilitator, FacilitatorSettleResultContext } from "@x402/core/facilitator";
 // Import legacy verify/settle functions - using file path since @x402/legacy points to the legacy directory
@@ -22,7 +18,7 @@ import { ExactEvmScheme } from "@x402/evm/exact/facilitator";
 import { ExactEvmSchemeV1 as ExactEvmSchemeV1Facilitator } from "@x402/evm/exact/v1/facilitator";
 import { toFacilitatorEvmSigner } from "@x402/evm";
 import { createWalletClient, http, publicActions, type Address, type Authorization } from "viem";
-import { baseSepolia } from "viem/chains";
+import { baseSepolia, base } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 
 // Import config
@@ -44,15 +40,21 @@ import { createRedisStore, type KeyValueStore } from "./src/services/redisStore"
 const evmAccount = privateKeyToAccount(FACILITATOR_PRIVATE_KEY as `0x${string}`);
 console.log("facilitator address:", evmAccount.address);
 
-// Create a Viem client with both wallet and public capabilities
-const viemClient = createWalletClient({
+// Create separate Viem clients for Base Sepolia and Base mainnet
+const baseSepoliaClient = createWalletClient({
   account: evmAccount,
   chain: baseSepolia,
   transport: http(),
 }).extend(publicActions);
 
-// Initialize the x402 Facilitator with EVM support
-const evmSigner = toFacilitatorEvmSigner({
+const baseMainnetClient = createWalletClient({
+  account: evmAccount,
+  chain: base,
+  transport: http(),
+}).extend(publicActions);
+
+// Create signer for Base Sepolia
+const baseSepoliaSigner = toFacilitatorEvmSigner({
   address: evmAccount.address,
   readContract: (args: {
     address: `0x${string}`;
@@ -60,7 +62,7 @@ const evmSigner = toFacilitatorEvmSigner({
     functionName: string;
     args?: readonly unknown[];
   }) =>
-    viemClient.readContract({
+    baseSepoliaClient.readContract({
       ...args,
       args: args.args || [],
     }),
@@ -71,25 +73,65 @@ const evmSigner = toFacilitatorEvmSigner({
     primaryType: string;
     message: Record<string, unknown>;
     signature: `0x${string}`;
-  }) => viemClient.verifyTypedData(args as any),
+  }) => baseSepoliaClient.verifyTypedData(args as any),
   writeContract: (args: {
     address: `0x${string}`;
     abi: readonly unknown[];
     functionName: string;
     args: readonly unknown[];
   }) =>
-    viemClient.writeContract({
+    baseSepoliaClient.writeContract({
       ...args,
       args: args.args || [],
     }),
   waitForTransactionReceipt: (args: { hash: `0x${string}` }) =>
-    viemClient.waitForTransactionReceipt(args),
+    baseSepoliaClient.waitForTransactionReceipt(args),
 });
 
-// Initialize facilitator and register schemes
+// Create signer for Base mainnet
+const baseMainnetSigner = toFacilitatorEvmSigner({
+  address: evmAccount.address,
+  readContract: (args: {
+    address: `0x${string}`;
+    abi: readonly unknown[];
+    functionName: string;
+    args?: readonly unknown[];
+  }) =>
+    baseMainnetClient.readContract({
+      ...args,
+      args: args.args || [],
+    }),
+  verifyTypedData: (args: {
+    address: `0x${string}`;
+    domain: Record<string, unknown>;
+    types: Record<string, unknown>;
+    primaryType: string;
+    message: Record<string, unknown>;
+    signature: `0x${string}`;
+  }) => baseMainnetClient.verifyTypedData(args as any),
+  writeContract: (args: {
+    address: `0x${string}`;
+    abi: readonly unknown[];
+    functionName: string;
+    args: readonly unknown[];
+  }) =>
+    baseMainnetClient.writeContract({
+      ...args,
+      args: args.args || [],
+    }),
+  waitForTransactionReceipt: (args: { hash: `0x${string}` }) =>
+    baseMainnetClient.waitForTransactionReceipt(args),
+});
+
 const facilitator = new x402Facilitator();
-facilitator.register(["eip155:84532", "eip155:8453"], new ExactEvmScheme(evmSigner));
-facilitator.registerV1(["base-sepolia", "base"] as any, new ExactEvmSchemeV1Facilitator(evmSigner));
+
+// Register v2 networks - separate registration for each chain
+facilitator.register(["eip155:84532"], new ExactEvmScheme(baseSepoliaSigner));
+facilitator.register(["eip155:8453"], new ExactEvmScheme(baseMainnetSigner));
+
+// Register v1 networks - separate registration for each chain
+facilitator.registerV1(["base-sepolia"] as any, new ExactEvmSchemeV1Facilitator(baseSepoliaSigner));
+facilitator.registerV1(["base"] as any, new ExactEvmSchemeV1Facilitator(baseMainnetSigner));
 
 // ============================================================================
 // Data Stores
@@ -103,14 +145,21 @@ const agentAddressStore = createRedisStore<string>(REDIS_URL);
 // ============================================================================
 facilitator.registerExtension("erc-8004").onAfterSettle(async context => {
   await register(context);
-  await feedback(context);
+  // feedback happens async
+  feedback(context);
 });
 
 const register = async (context: FacilitatorSettleResultContext) => {
   const paymentPayload = context.paymentPayload;
   const extensions = paymentPayload.extensions;
 
-  const registeryInfo = extensions?.["erc-8004"] as { registerAuth?: Authorization, tokenURI?: string, metadata?: { key: string, value: string }[] } | undefined;
+  const registeryInfo = extensions?.["erc-8004"] as
+    | {
+        registerAuth?: Authorization;
+        tokenURI?: string;
+        metadata?: { key: string; value: string }[];
+      }
+    | undefined;
   if (!registeryInfo) {
     return;
   }

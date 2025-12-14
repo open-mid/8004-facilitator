@@ -35,7 +35,8 @@ export type RegisterResult = {
 };
 
 export async function registerAgent(info: RegisterInfo): Promise<RegisterResult> {
-  const { network, tokenURI, metadata, agentAddress, authorization } = info;
+  const { tokenURI, metadata, agentAddress, authorization } = info;
+  const network = "eip155:84532"; // force registration to base sepolia
 
   if (!network) {
     console.log("Registration failed: missing network");

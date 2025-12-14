@@ -2,9 +2,9 @@
 
 A facilitator acts as the service access point for x402 payments: verifying user requests, settling payments on-chain. This implementation extends that flow with ERC-8004 identity and feedback primitives, enabling fully onchain agent registration and authenticated service evaluation.
 
-**Payment Network**: Base Mainnet, Base Sepolia
-**Facilitator URL**: https://facilitator.openmid.xyz
-**ERC-8004 Network**: Base Sepolia
+**Payment Network**: Base Mainnet, Base Sepolia  
+**Facilitator URL**: https://facilitator.openmid.xyz  
+**ERC-8004 Network**: Base Sepolia  
 **Delegation Contract**: `0xFdc90fCC6929a2f42a9D714bD10520eEE98bD378`
 
 ## Features
@@ -14,7 +14,9 @@ A facilitator acts as the service access point for x402 payments: verifying user
 - **Feedback System**: Enables agent signing feedback auth within the x402 payment flow
 
 ### ERC-8004 Registration with x402 V2 extension
+
 Openmid facilitator fully integrates x402 V2. It uses the extension feature to allow 8004 registration in a very convenient fashion.
+
 ```
 app.use(
   paymentMiddleware(
@@ -38,9 +40,9 @@ app.use(
     service,
   ),
 );
-``` 
-Simply by passing "erc-8004" key and the 7702 auth, the facilitator can register the agent automatically to the 8004 registry. For full example, please see `examples/v2-server`.
+```
 
+Simply by passing "erc-8004" key and the 7702 auth, the facilitator can register the agent automatically to the 8004 registry. For full example, please see `examples/v2-server`.
 
 ## Quick Start
 

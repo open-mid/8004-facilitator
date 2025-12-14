@@ -48,11 +48,18 @@ console.log("agent address:", agentAccount.address);
  * @param chainId The chain ID
  * @returns Authorization object for EIP-7702
  */
-async function generateRegistrationAuthorization(
+async function generateSerializedRegistrationAuthorization(
   delegateContractAddress: Address,
   agentPrivateKey: `0x${string}`,
   chainId: number,
-): Promise<Authorization> {
+): Promise<{
+  chainId: string;
+  address: `0x${string}`;
+  nonce: string;
+  yParity: number | undefined;
+  r: `0x${string}`;
+  s: `0x${string}`;
+}> {
   const agentAccount = privateKeyToAccount(agentPrivateKey);
 
   const walletClient = createWalletClient({
@@ -67,7 +74,15 @@ async function generateRegistrationAuthorization(
     chainId,
   });
 
-  return authorization;
+  const serializedAuthorization = {
+    chainId: authorization.chainId.toString(),
+    address: authorization.address,
+    nonce: authorization.nonce.toString(),
+    yParity: authorization.yParity,
+    r: authorization.r,
+    s: authorization.s,
+  };
+  return serializedAuthorization;
 }
 
 // ============================================================================
@@ -82,6 +97,12 @@ const facilitatorClient = new HTTPFacilitatorClient({ url: facilitatorUrl });
 const service = new x402ResourceServer(facilitatorClient);
 registerExactEvmScheme(service);
 
+const registerAuth = await generateSerializedRegistrationAuthorization(
+  delegateContractAddress as Address,
+  agentPrivateKey,
+  84532,
+);
+
 // Configure payment middleware
 app.use(
   paymentMiddleware(
@@ -91,13 +112,15 @@ app.use(
           payTo,
           scheme: "exact",
           price: "$0.001",
-          network: "eip155:84532",
+          network: "eip155:8453",
         },
         extensions: {
-          feedback: {
-            feedbackEnabled: true,
+          "erc-8004": {
+            registerAuth: registerAuth,
+            tokenURI: "https://example.com/tokenURI",
+            metadata: [{ key: "name", value: "Example" }],
             feedbackAuthEndpoint: "/signFeedbackAuth",
-            agentId: "1133",
+            feedbackEnabled: true,
           },
         },
       },

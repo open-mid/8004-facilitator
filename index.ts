@@ -18,7 +18,8 @@ import type {
   VerifyResponse,
   SettleResponse,
 } from "@x402/core/types";
-import { registerExactEvmScheme } from "@x402/evm/exact/facilitator";
+import { ExactEvmScheme } from "@x402/evm/exact/facilitator";
+import { ExactEvmSchemeV1 as ExactEvmSchemeV1Facilitator } from "@x402/evm/exact/v1/facilitator";
 import { toFacilitatorEvmSigner } from "@x402/evm";
 import { createWalletClient, http, publicActions, type Address, type Authorization } from "viem";
 import { baseSepolia } from "viem/chains";
@@ -87,10 +88,8 @@ const evmSigner = toFacilitatorEvmSigner({
 
 // Initialize facilitator and register schemes
 const facilitator = new x402Facilitator();
-registerExactEvmScheme(facilitator, {
-  signer: evmSigner,
-  networks: ["eip155:84532", "eip155:8453"],
-});
+facilitator.register(["eip155:84532", "eip155:8453"], new ExactEvmScheme(evmSigner));
+facilitator.registerV1(["base-sepolia", "base"] as any, new ExactEvmSchemeV1Facilitator(evmSigner));
 
 // ============================================================================
 // Data Stores
@@ -102,7 +101,7 @@ const agentAddressStore = createRedisStore<string>(REDIS_URL);
 // ============================================================================
 // Extension Setup
 // ============================================================================
-facilitator.registerExtension("8004").onAfterSettle(async context => {
+facilitator.registerExtension("erc-8004").onAfterSettle(async context => {
   await register(context);
   await feedback(context);
 });
@@ -172,7 +171,6 @@ const register = async (context: FacilitatorSettleResultContext) => {
   }
 };
 
-// Register feedback extension with lifecycle hooks
 const feedback = async (context: FacilitatorSettleResultContext) => {
   const paymentPayload = context.paymentPayload;
   const extensions = paymentPayload.extensions;
@@ -229,10 +227,6 @@ const feedback = async (context: FacilitatorSettleResultContext) => {
     console.error(`❌ Failed to generate feedbackAuth for v2: ${result.error}`);
   }
 };
-
-// ============================================================================
-// Express App Setup
-// ============================================================================
 
 const app = express();
 app.use(express.json());
@@ -477,17 +471,7 @@ app.post("/register", async (req, res) => {
  */
 app.get("/supported", async (req, res) => {
   try {
-    const response = {
-      kinds: [
-        {
-          x402Version: 2,
-          scheme: "exact",
-          network: "eip155:84532",
-        },
-      ],
-      extensions: ["feedback"],
-    };
-    console.log("Returning supported schemes:", response);
+    const response = facilitator.getSupported();
     res.json(response);
   } catch (error) {
     console.error("Supported error:", error);
@@ -495,34 +479,6 @@ app.get("/supported", async (req, res) => {
       error: error instanceof Error ? error.message : "Unknown error",
     });
   }
-});
-
-/**
- * GET /health
- * Health check endpoint
- */
-app.get("/health", (req, res) => {
-  res.json({
-    status: "ok",
-    network: "eip155:84532",
-    facilitator: "typescript",
-    version: "2.0.0",
-    extensions: ["register"],
-  });
-});
-
-/**
- * POST /close
- * Graceful shutdown endpoint
- */
-app.post("/close", (req, res) => {
-  res.json({ message: "Facilitator shutting down gracefully" });
-  console.log("Received shutdown request");
-
-  // Give time for response to be sent
-  setTimeout(() => {
-    process.exit(0);
-  }, 100);
 });
 
 // ============================================================================
@@ -534,15 +490,13 @@ app.listen(parseInt(PORT), () => {
 ╔════════════════════════════════════════════════════════╗
 ║           x402 TypeScript Facilitator                  ║
 ╠════════════════════════════════════════════════════════╣
-║  Network:    eip155:84532                              ║
-║  Extensions: feedback                                  ║
+║  Network:    eip155:84532, eip155:8453                 ║
+║  Extensions: erc-8004                                  ║
 ║                                                        ║
 ║  Endpoints:                                            ║
 ║  • POST /verify              (verify payment)          ║
 ║  • POST /settle              (settle payment)          ║
 ║  • GET  /supported           (get supported kinds)     ║
-║  • GET  /health              (health check)            ║
-║  • POST /close               (shutdown server)         ║
 ║  • POST /register            (register agent)          ║
 ╚════════════════════════════════════════════════════════╝
   `);

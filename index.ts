@@ -110,7 +110,7 @@ const register = async (context: FacilitatorSettleResultContext) => {
   const paymentPayload = context.paymentPayload;
   const extensions = paymentPayload.extensions;
 
-  const registeryInfo = extensions?.["erc-8004"] as { registerEndpoint?: string } | undefined;
+  const registeryInfo = extensions?.["erc-8004"] as { registerAuth?: Authorization, tokenURI?: string, metadata?: { key: string, value: string }[] } | undefined;
   if (!registeryInfo) {
     return;
   }
@@ -122,41 +122,23 @@ const register = async (context: FacilitatorSettleResultContext) => {
     return;
   }
 
-  const resourceUrl = paymentPayload.resource?.url;
-  const registerEndpoint = (registeryInfo as { registerEndpoint?: string })?.registerEndpoint;
-
-  console.log(`🔍 Registering agent ${agentAddress} with endpoint ${registerEndpoint}`);
-
-  if (!registerEndpoint) {
-    return;
-  }
-
-  const registerUrl = `${new URL(resourceUrl).origin}${registerEndpoint}`;
-  console.log(`🔍 Register URL: ${registerUrl}`);
+  const registerAuth = registeryInfo.registerAuth;
 
   try {
-    const response = await fetch(registerUrl);
-    const data = await response.json();
-    if (!response.ok) {
-      console.error(`❌ Failed to register agent: ${data.error}`);
-      return;
-    }
-
-    const { tokenURI, metadata, authorization } = data;
     const deserializedAuthorization = {
-      chainId: BigInt((authorization as any).chainId),
-      address: (authorization as any).address as Address,
-      nonce: BigInt((authorization as any).nonce),
-      yParity: (authorization as any).yParity as 0 | 1,
-      r: (authorization as any).r as `0x${string}`,
-      s: (authorization as any).s as `0x${string}`,
+      chainId: BigInt((registerAuth as any).chainId),
+      address: (registerAuth as any).address as Address,
+      nonce: BigInt((registerAuth as any).nonce),
+      yParity: (registerAuth as any).yParity as 0 | 1,
+      r: (registerAuth as any).r as `0x${string}`,
+      s: (registerAuth as any).s as `0x${string}`,
     } as unknown as Authorization;
 
     const result = await registerAgent({
       agentAddress: agentAddress as Address,
       authorization: deserializedAuthorization,
-      tokenURI,
-      metadata,
+      tokenURI: registeryInfo.tokenURI,
+      metadata: registeryInfo.metadata,
       network: paymentPayload.accepted?.network,
     });
 

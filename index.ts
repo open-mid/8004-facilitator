@@ -134,40 +134,45 @@ const register = async (context: FacilitatorSettleResultContext) => {
   const registerUrl = `${new URL(resourceUrl).origin}${registerEndpoint}`;
   console.log(`🔍 Register URL: ${registerUrl}`);
 
-  const response = await fetch(registerUrl);
-  const data = await response.json();
-  if (!response.ok) {
-    console.error(`❌ Failed to register agent: ${data.error}`);
+  try {
+    const response = await fetch(registerUrl);
+    const data = await response.json();
+    if (!response.ok) {
+      console.error(`❌ Failed to register agent: ${data.error}`);
+      return;
+    }
+
+    const { tokenURI, metadata, authorization } = data;
+    const deserializedAuthorization = {
+      chainId: BigInt((authorization as any).chainId),
+      address: (authorization as any).address as Address,
+      nonce: BigInt((authorization as any).nonce),
+      yParity: (authorization as any).yParity as 0 | 1,
+      r: (authorization as any).r as `0x${string}`,
+      s: (authorization as any).s as `0x${string}`,
+    } as unknown as Authorization;
+
+    const result = await registerAgent({
+      agentAddress: agentAddress as Address,
+      authorization: deserializedAuthorization,
+      tokenURI,
+      metadata,
+      network: paymentPayload.accepted?.network,
+    });
+
+    if (!result.success) {
+      return;
+    }
+
+    if (result.agentId) {
+      await agentAddressStore.set(agentAddress.toLowerCase(), result.agentId);
+      console.log(
+        `📝 Stored v2 agentAddress (${agentAddress}) -> agentId (${result.agentId}) mapping`,
+      );
+    }
+  } catch (error) {
+    console.error(`❌ Failed to register agent: ${error}`);
     return;
-  }
-
-  const { tokenURI, metadata, authorization } = data;
-  const deserializedAuthorization = {
-    chainId: BigInt((authorization as any).chainId),
-    address: (authorization as any).address as Address,
-    nonce: BigInt((authorization as any).nonce),
-    yParity: (authorization as any).yParity as 0 | 1,
-    r: (authorization as any).r as `0x${string}`,
-    s: (authorization as any).s as `0x${string}`,
-  } as unknown as Authorization;
-
-  const result = await registerAgent({
-    agentAddress: agentAddress as Address,
-    authorization: deserializedAuthorization,
-    tokenURI,
-    metadata,
-    network: paymentPayload.accepted?.network,
-  });
-
-  if (!result.success) {
-    return;
-  }
-
-  if (result.agentId) {
-    await agentAddressStore.set(agentAddress.toLowerCase(), result.agentId);
-    console.log(
-      `📝 Stored v2 agentAddress (${agentAddress}) -> agentId (${result.agentId}) mapping`,
-    );
   }
 };
 
@@ -190,6 +195,12 @@ const feedback = async (context: FacilitatorSettleResultContext) => {
     return;
   }
 
+  const agentAddress = (paymentPayload.accepted.payTo as Address).toLowerCase();
+  if (!agentAddress) {
+    console.warn("No agent address found in payment payload, skipping feedbackAuth generation");
+    return;
+  }
+
   const network = paymentPayload.accepted?.network || "base-sepolia";
 
   const resourceUrl = paymentPayload.resource?.url;
@@ -207,7 +218,7 @@ const feedback = async (context: FacilitatorSettleResultContext) => {
     }
   }
 
-  const agentId = await agentAddressStore.get(clientAddress.toLowerCase());
+  const agentId = await agentAddressStore.get(agentAddress);
   if (!agentId) {
     console.error(`❌ Agent not found for client address: ${clientAddress}`);
     return;

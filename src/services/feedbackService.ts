@@ -145,64 +145,74 @@ export async function generateClientFeedbackAuth(
       error: `Unsupported network: ${network}`,
     };
   }
+  const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
+  const actualChainId = await publicClient.getChainId();
 
   try {
-    const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
+    const agentIdBigInt = BigInt(agentId);
+    let owner: Address | undefined;
+    let lastError: Error | undefined;
 
-    // Get the actual chain ID from the blockchain
-    const actualChainId = await publicClient.getChainId();
+    // Retry up to 3 times with exponential backoff (for timing issues after registration)
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        owner = (await publicClient.readContract({
+          address: ERC8004_IDENTITY_REGISTRY_ADDRESS,
+          abi: identityRegistryAbi,
+          functionName: "ownerOf",
+          args: [agentIdBigInt],
+        })) as Address;
+        break; // Success, exit retry loop
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        if (attempt < 3) {
+          const delay = Math.pow(2, attempt - 1) * 1000; // 1s, 2s
+          console.log(
+            `⚠️ Attempt ${attempt}/3 failed to get agent owner, retrying in ${delay}ms...`,
+          );
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    }
 
-    // Check if agent exists and get owner
-    try {
-      const agentIdBigInt = BigInt(agentId);
-      const owner = await publicClient.readContract({
-        address: ERC8004_IDENTITY_REGISTRY_ADDRESS,
-        abi: identityRegistryAbi,
-        functionName: "ownerOf",
-        args: [agentIdBigInt],
-      });
-      // Agent exists - generate feedbackAuth
-      console.log(
-        `ERC-8004: Agent ${agentId} exists and belongs to ${owner}, generating feedbackAuth`,
-      );
+    if (!owner) {
+      throw lastError || new Error("Failed to get agent owner after 3 attempts");
+    }
 
-      const feedbackAuth = await generateFeedbackAuth(
-        agentId,
-        clientAddress,
-        owner,
-        FACILITATOR_PRIVATE_KEY as `0x${string}`,
-        actualChainId,
-        undefined, // expiry
-        undefined, // indexLimit
-        agentUrl, // agentUrl
-      );
+    console.log(
+      `ERC-8004: Agent ${agentId} exists and belongs to ${owner}, generating feedbackAuth`,
+    );
 
-      // Store feedbackAuth and agentId with 1 hour TTL (matches feedbackAuth expiry)
-      await feedbackAuthStore.set(
-        clientAddress.toLowerCase(),
-        {
-          agentId,
-          feedbackAuth,
-        },
-        3600, // 1 hour TTL
-      );
+    const feedbackAuth = await generateFeedbackAuth(
+      agentId,
+      clientAddress,
+      owner,
+      FACILITATOR_PRIVATE_KEY as `0x${string}`,
+      actualChainId,
+      undefined, // expiry
+      undefined, // indexLimit
+      agentUrl, // agentUrl
+    );
 
-      console.log(
-        `📝 Stored feedbackAuth and agentId (${agentId}) for client address: ${clientAddress}`,
-      );
-
-      return {
-        success: true,
+    // Store feedbackAuth and agentId with 1 hour TTL (matches feedbackAuth expiry)
+    await feedbackAuthStore.set(
+      clientAddress.toLowerCase(),
+      {
         agentId,
         feedbackAuth,
-      };
-    } catch (err) {
-      // If ownerOf reverts, agent doesn't exist
-      return {
-        success: false,
-        error: `Agent ${agentId} does not exist: ${err instanceof Error ? err.message : "Unknown error"}`,
-      };
-    }
+      },
+      3600, // 1 hour TTL
+    );
+
+    console.log(
+      `📝 Stored feedbackAuth and agentId (${agentId}) for client address: ${clientAddress}`,
+    );
+
+    return {
+      success: true,
+      agentId,
+      feedbackAuth,
+    };
   } catch (e: any) {
     console.error("ERC-8004: Failed to generate feedbackAuth:", e?.message || e);
     return {

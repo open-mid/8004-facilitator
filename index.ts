@@ -1,13 +1,5 @@
 import express from "express";
 import { x402Facilitator, FacilitatorSettleResultContext } from "@x402/core/facilitator";
-// Import legacy verify/settle functions - using file path since @x402/legacy points to the legacy directory
-import { verify as legacyVerify, settle as legacySettle } from "@x402/legacy/x402/dist/cjs/verify";
-import type {
-  PaymentPayload as LegacyPaymentPayload,
-  PaymentRequirements as LegacyPaymentRequirements,
-  VerifyResponse as LegacyVerifyResponse,
-  SettleResponse as LegacySettleResponse,
-} from "@x402/legacy/x402/dist/cjs/types";
 import type {
   PaymentRequirements,
   PaymentPayload,
@@ -19,10 +11,9 @@ import { ExactEvmSchemeV1 as ExactEvmSchemeV1Facilitator } from "@x402/evm/exact
 import type { Address, Authorization } from "viem";
 
 // Import config
-import { RPC_URL, PORT, FACILITATOR_PRIVATE_KEY, REDIS_URL } from "./src/config/env";
+import { PORT, FACILITATOR_PRIVATE_KEY, REDIS_URL } from "./src/config/env";
 
 // Import utils
-import { mapX402NetworkToChain } from "./src/utils/network";
 import { createFacilitatorSigners } from "./src/utils/signers";
 
 // Import services
@@ -42,11 +33,15 @@ console.log("facilitator address:", evmAccount.address);
 const facilitator = new x402Facilitator();
 
 // Register v2 networks - separate registration for each chain
+// @ts-ignore
 facilitator.register(["eip155:84532"], new ExactEvmScheme(baseSepoliaSigner));
+// @ts-ignore
 facilitator.register(["eip155:8453"], new ExactEvmScheme(baseMainnetSigner));
 
 // Register v1 networks - separate registration for each chain
+// @ts-ignore
 facilitator.registerV1(["base-sepolia"] as any, new ExactEvmSchemeV1Facilitator(baseSepoliaSigner));
+// @ts-ignore
 facilitator.registerV1(["base"] as any, new ExactEvmSchemeV1Facilitator(baseMainnetSigner));
 
 // ============================================================================
@@ -200,8 +195,8 @@ app.use(express.json());
 app.post("/verify", async (req, res) => {
   try {
     const { paymentPayload, paymentRequirements } = req.body as {
-      paymentPayload: PaymentPayload | LegacyPaymentPayload;
-      paymentRequirements: PaymentRequirements | LegacyPaymentRequirements;
+      paymentPayload: PaymentPayload;
+      paymentRequirements: PaymentRequirements;
     };
 
     if (!paymentPayload || !paymentRequirements) {
@@ -210,46 +205,9 @@ app.post("/verify", async (req, res) => {
       });
     }
 
-    const x402Version = (paymentPayload as any).x402Version;
-    if (x402Version === 1) {
-      console.log("Using legacy verify for x402Version 1");
+    const response: VerifyResponse = await facilitator.verify(paymentPayload, paymentRequirements);
 
-      if (!RPC_URL) {
-        return res.status(500).json({
-          error: "RPC_URL not configured",
-        });
-      }
-
-      const legacyPayload = paymentPayload as LegacyPaymentPayload;
-      const legacyRequirements = paymentRequirements as LegacyPaymentRequirements;
-
-      const network = legacyRequirements.network;
-      const chain = mapX402NetworkToChain(network, RPC_URL);
-
-      if (!chain) {
-        return res.status(400).json({
-          isValid: false,
-          invalidReason: "invalid_scheme" as any, // Type assertion needed due to strict error enum
-        } as LegacyVerifyResponse);
-      }
-
-      const response: LegacyVerifyResponse = await legacyVerify(legacyPayload, legacyRequirements);
-
-      return res.json(response);
-    } else if (x402Version === 2) {
-      console.log("Using x402 v2 for verify");
-
-      const response: VerifyResponse = await facilitator.verify(
-        paymentPayload as PaymentPayload,
-        paymentRequirements as PaymentRequirements,
-      );
-
-      return res.json(response);
-    } else {
-      return res.status(400).json({
-        error: `Unsupported x402Version: ${x402Version}`,
-      });
-    }
+    return res.json(response);
   } catch (error) {
     console.error("Verify error:", error);
     res.status(500).json({
@@ -267,8 +225,8 @@ app.post("/verify", async (req, res) => {
 app.post("/settle", async (req, res) => {
   try {
     const { paymentPayload, paymentRequirements } = req.body as {
-      paymentPayload: PaymentPayload | LegacyPaymentPayload;
-      paymentRequirements: PaymentRequirements | LegacyPaymentRequirements;
+      paymentPayload: PaymentPayload;
+      paymentRequirements: PaymentRequirements;
     };
 
     if (!paymentPayload || !paymentRequirements) {
@@ -277,66 +235,13 @@ app.post("/settle", async (req, res) => {
       });
     }
 
-    const x402Version = (paymentPayload as any).x402Version;
-    if (x402Version === 1) {
-      console.log("Using legacy settle for x402Version 1");
+    const response: SettleResponse = await facilitator.settle(paymentPayload, paymentRequirements);
 
-      if (!RPC_URL || !FACILITATOR_PRIVATE_KEY) {
-        return res.status(500).json({
-          success: false,
-          errorReason: "invalid_scheme" as any, // Type assertion needed due to strict error enum
-          network: (paymentRequirements as LegacyPaymentRequirements).network,
-          transaction: "",
-        } as LegacySettleResponse);
-      }
-
-      const legacyPayload = paymentPayload as LegacyPaymentPayload;
-      const legacyRequirements = paymentRequirements as LegacyPaymentRequirements;
-
-      // Get network from requirements (v1 format)
-      const network = legacyRequirements.network;
-      const chain = mapX402NetworkToChain(network, RPC_URL);
-
-      if (!chain) {
-        return res.status(400).json({
-          success: false,
-          errorReason: "invalid_scheme" as any, // Type assertion needed due to strict error enum
-          network,
-          transaction: "",
-        } as LegacySettleResponse);
-      }
-
-      const response: LegacySettleResponse = await legacySettle(legacyPayload, legacyRequirements);
-      // TODO: not generating feedbackAuth for v1 after successful settlement
-
-      return res.json(response);
-    } else if (x402Version === 2) {
-      console.log("Using x402 v2 for settle");
-
-      // Hooks will automatically:
-      // - Validate payment was verified (onBeforeSettle - will abort if not)
-      // - Check verification timeout (onBeforeSettle)
-      // - Clean up tracking (onAfterSettle / onSettleFailure)
-      const response: SettleResponse = await facilitator.settle(
-        paymentPayload as PaymentPayload,
-        paymentRequirements as PaymentRequirements,
-      );
-
-      return res.json(response);
-    } else {
-      return res.status(400).json({
-        success: false,
-        errorReason: "invalid_scheme" as any, // Type assertion needed due to strict error enum
-        network: (paymentRequirements as any).network || "base-sepolia",
-        transaction: "",
-      } as LegacySettleResponse);
-    }
+    return res.json(response);
   } catch (error) {
     console.error("Settle error:", error);
 
-    // Check if this was an abort from hook (v2 only)
     if (error instanceof Error && error.message.includes("Settlement aborted:")) {
-      // Return a proper SettleResponse instead of 500 error
       return res.json({
         success: false,
         errorReason: error.message.replace("Settlement aborted: ", ""),

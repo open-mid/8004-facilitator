@@ -352,6 +352,44 @@ app.get("/supported", async (req, res) => {
   }
 });
 
+/**
+ * GET /agent
+ * Get agent ID by address
+ */
+app.get("/agent", async (req, res) => {
+  try {
+    const address = req.query.address as string;
+
+    if (!address) {
+      return res.status(400).json({
+        success: false,
+        error: "Address parameter is required",
+      });
+    }
+
+    const agentId = await agentAddressStore.get(address.toLowerCase());
+
+    if (!agentId) {
+      return res.status(404).json({
+        success: false,
+        error: `Agent not found for address: ${address}`,
+      });
+    }
+
+    res.json({
+      success: true,
+      address: address.toLowerCase(),
+      agentId,
+    });
+  } catch (error) {
+    console.error("Get agent error:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+});
+
 // ============================================================================
 // Server Startup
 // ============================================================================
@@ -369,6 +407,7 @@ app.listen(parseInt(PORT), () => {
 ║  • POST /settle              (settle payment)          ║
 ║  • GET  /supported           (get supported kinds)     ║
 ║  • POST /register            (register agent)          ║
+║  • GET  /agent               (get agent by address)    ║
 ╚════════════════════════════════════════════════════════╝
   `);
 

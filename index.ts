@@ -256,6 +256,14 @@ app.post("/settle", async (req, res) => {
 });
 
 /**
+ * GET /
+ * Redirect to documentation
+ */
+app.get("/", (req, res) => {
+  res.redirect("https://www.openmid.xyz/docs");
+});
+
+/**
  * POST /register
  * Register a new agent with ERC-8004
  */

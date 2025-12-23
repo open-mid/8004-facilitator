@@ -4,6 +4,7 @@ A facilitator acts as the service access point for x402 payments: verifying user
 
 **Payment Network**: Base Mainnet, Base Sepolia  
 **Facilitator URL**: https://facilitator.openmid.xyz  
+**Documentation**: https://www.openmid.xyz/docs  
 **ERC-8004 Network**: Base Sepolia  
 **Delegation Contract**: `0xFdc90fCC6929a2f42a9D714bD10520eEE98bD378`
 

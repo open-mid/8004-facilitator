@@ -50,6 +50,9 @@ export function createFacilitatorSigners(privateKey: `0x${string}`) {
       }),
     waitForTransactionReceipt: (args: { hash: `0x${string}` }) =>
       baseSepoliaClient.waitForTransactionReceipt(args),
+    sendTransaction: (args: { to: `0x${string}`; data: `0x${string}`; value?: bigint }) =>
+      baseSepoliaClient.sendTransaction(args),
+    getCode: (args: { address: `0x${string}` }) => baseSepoliaClient.getCode(args),
   });
 
   const baseMainnetSigner = toFacilitatorEvmSigner({
@@ -84,6 +87,9 @@ export function createFacilitatorSigners(privateKey: `0x${string}`) {
       }),
     waitForTransactionReceipt: (args: { hash: `0x${string}` }) =>
       baseMainnetClient.waitForTransactionReceipt(args),
+    sendTransaction: (args: { to: `0x${string}`; data: `0x${string}`; value?: bigint }) =>
+      baseMainnetClient.sendTransaction(args),
+    getCode: (args: { address: `0x${string}` }) => baseMainnetClient.getCode(args),
   });
 
   return {

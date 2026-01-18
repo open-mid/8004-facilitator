@@ -33,8 +33,27 @@ interface IIdentityRegistry {
 }
 
 interface IReputationRegistry {
-    function giveFeedback(uint256 agentId, uint8 score, bytes32 tag1, bytes32 tag2, string calldata fileuri, bytes32 filehash, bytes memory feedbackAuth) external;
-    function getIdentityRegistry() external view returns (address);
+    // v1: feedbackAuth removed - direct submission
+    function giveFeedback(
+        uint256 agentId,
+        uint8 score,
+        string calldata tag1,
+        string calldata tag2,
+        string calldata endpoint,
+        string calldata feedbackURI,
+        bytes32 feedbackHash
+    ) external;
+}
+
+// Struct to avoid stack too deep
+struct FeedbackParams {
+    uint256 agentId;
+    uint8 score;
+    string tag1;
+    string tag2;
+    string endpoint;
+    string feedbackURI;
+    bytes32 feedbackHash;
 }
 
 contract AgentRegistrationDelegate {
@@ -96,8 +115,18 @@ contract AgentRegistrationDelegate {
         return IERC721Receiver.onERC721Received.selector;
     }
 
-    function giveFeedback(address registry, uint256 agentId, uint8 score, bytes32 tag1, bytes32 tag2, string calldata fileuri, bytes32 filehash, bytes memory feedbackAuth) external {
-        IReputationRegistry(registry).giveFeedback(agentId, score, tag1, tag2, fileuri, filehash, feedbackAuth);
+    // v1: feedbackAuth removed - direct submission
+    // Using struct to avoid stack too deep error
+    function giveFeedback(address registry, FeedbackParams calldata params) external {
+        IReputationRegistry(registry).giveFeedback(
+            params.agentId,
+            params.score,
+            params.tag1,
+            params.tag2,
+            params.endpoint,
+            params.feedbackURI,
+            params.feedbackHash
+        );
     }
 
     function executeFiatTokenV2TransferWithAuthorization(

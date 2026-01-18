@@ -9,11 +9,17 @@ function normalizePrivateKey(key: string | undefined): string | undefined {
 }
 
 export const RPC_URL = process.env.RPC_URL as string;
+
+// ERC-8004 v1 Contract Addresses (Base Sepolia)
+// Identity Registry: 0xdc527768082c489e0ee228d24d3cfa290214f387
+// Reputation Registry: 0xd1f3ed781c16d69fb6b2fe3d0d9cb11aa3529fc8
 export const ERC8004_IDENTITY_REGISTRY_ADDRESS = process.env
   .ERC8004_IDENTITY_REGISTRY_ADDRESS as `0x${string}`;
+export const ERC8004_REPUTATION_REGISTRY_ADDRESS = process.env
+  .ERC8004_REPUTATION_REGISTRY_ADDRESS as `0x${string}`;
 export const DELEGATE_CONTRACT_ADDRESS = process.env.DELEGATE_CONTRACT_ADDRESS as `0x${string}`;
 export const PORT = process.env.PORT || "4022";
-export const REDIS_URL = process.env.REDIS_URL
+export const REDIS_URL = process.env.REDIS_URL;
 
 export const FACILITATOR_PRIVATE_KEY = normalizePrivateKey(process.env.FACILITATOR_PRIVATE_KEY);
 
@@ -29,6 +35,11 @@ if (!RPC_URL) {
 
 if (!ERC8004_IDENTITY_REGISTRY_ADDRESS) {
   console.error("❌ ERC8004_IDENTITY_REGISTRY_ADDRESS environment variable is required");
+  process.exit(1);
+}
+
+if (!ERC8004_REPUTATION_REGISTRY_ADDRESS) {
+  console.error("❌ ERC8004_REPUTATION_REGISTRY_ADDRESS environment variable is required");
   process.exit(1);
 }
 

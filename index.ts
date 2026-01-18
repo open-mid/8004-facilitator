@@ -18,8 +18,19 @@ import { createFacilitatorSigners } from "./src/utils/signers";
 
 // Import services
 import { registerAgent } from "./src/services/registerService";
-import { generateClientFeedbackAuth } from "./src/services/feedbackService";
+import { giveFeedback, getReputationSummary } from "./src/services/reputationService";
 import { createRedisStore } from "./src/services/redisStore";
+
+// Import metrics
+import {
+  register as metricsRegister,
+  settlementCounter,
+  registrationCounter,
+  feedbackCounter,
+  settlementDuration,
+  verifyCounter,
+  verifyDuration,
+} from "./src/services/metrics";
 
 // ============================================================================
 // Configuration & Initialization
@@ -48,16 +59,24 @@ facilitator.registerV1(["base"] as any, new ExactEvmSchemeV1Facilitator(baseMain
 // Data Stores
 // ============================================================================
 
-const feedbackAuthStore = createRedisStore<{ agentId: string; feedbackAuth: string }>(REDIS_URL);
 const agentAddressStore = createRedisStore<string>(REDIS_URL);
 
 // ============================================================================
 // Extension Setup
 // ============================================================================
 facilitator.registerExtension("erc-8004").onAfterSettle(async context => {
-  await register(context);
-  // feedback happens async
-  feedback(context);
+  const endTimer = settlementDuration.startTimer();
+  const network = context.paymentPayload.accepted?.network || "unknown";
+
+  try {
+    await register(context);
+    settlementCounter.inc({ network, status: "success" });
+  } catch (error) {
+    settlementCounter.inc({ network, status: "error" });
+    console.error("Extension error:", error);
+  } finally {
+    endTimer({ network });
+  }
 });
 
 const register = async (context: FacilitatorSettleResultContext) => {
@@ -103,6 +122,10 @@ const register = async (context: FacilitatorSettleResultContext) => {
     });
 
     if (!result.success) {
+      registrationCounter.inc({
+        network: paymentPayload.accepted?.network || "unknown",
+        status: "failure",
+      });
       return;
     }
 
@@ -111,73 +134,18 @@ const register = async (context: FacilitatorSettleResultContext) => {
       console.log(
         `📝 Stored v2 agentAddress (${agentAddress}) -> agentId (${result.agentId}) mapping`,
       );
+      registrationCounter.inc({
+        network: paymentPayload.accepted?.network || "unknown",
+        status: "success",
+      });
     }
   } catch (error) {
     console.error(`❌ Failed to register agent: ${error}`);
+    registrationCounter.inc({
+      network: paymentPayload.accepted?.network || "unknown",
+      status: "error",
+    });
     return;
-  }
-};
-
-const feedback = async (context: FacilitatorSettleResultContext) => {
-  const paymentPayload = context.paymentPayload;
-  const extensions = paymentPayload.extensions;
-
-  const feedbackInfo = extensions?.["erc-8004"] as
-    | { feedbackAuthEndpoint?: string; feedbackEnabled?: boolean }
-    | undefined;
-
-  if (!feedbackInfo || !feedbackInfo.feedbackEnabled) {
-    console.log("No feedback enabled for v2, skipping feedbackAuth generation");
-    return;
-  }
-
-  const clientAddress = (paymentPayload.payload as any)?.authorization?.from;
-  if (!clientAddress) {
-    console.warn("No client address found in payment payload, skipping feedbackAuth generation");
-    return;
-  }
-
-  const agentAddress = (paymentPayload.accepted.payTo as Address).toLowerCase();
-  if (!agentAddress) {
-    console.warn("No agent address found in payment payload, skipping feedbackAuth generation");
-    return;
-  }
-
-  const network = paymentPayload.accepted?.network || "base-sepolia";
-
-  const resourceUrl = paymentPayload.resource?.url;
-  const feedbackAuthEndpoint = (feedbackInfo as { feedbackAuthEndpoint?: string })
-    ?.feedbackAuthEndpoint;
-
-  let agentUrl: string | undefined;
-  if (resourceUrl) {
-    try {
-      const url = new URL(resourceUrl);
-      agentUrl = `${url.origin}${feedbackAuthEndpoint}`;
-    } catch {
-      console.error(`❌ Invalid resource URL: ${resourceUrl}`);
-      return;
-    }
-  }
-
-  const agentId = await agentAddressStore.get(agentAddress);
-  if (!agentId) {
-    console.error(`❌ Agent not found for client address: ${clientAddress}`);
-    return;
-  }
-
-  const result = await generateClientFeedbackAuth(
-    agentId,
-    clientAddress as Address,
-    network,
-    feedbackAuthStore,
-    agentUrl,
-  );
-
-  if (result.success) {
-    console.log(`✅ Generated feedbackAuth for v2 agent ${result.agentId}`);
-  } else {
-    console.error(`❌ Failed to generate feedbackAuth for v2: ${result.error}`);
   }
 };
 
@@ -193,6 +161,8 @@ app.use(express.json());
  * Verify a payment against requirements
  */
 app.post("/verify", async (req, res) => {
+  const endTimer = verifyDuration.startTimer();
+
   try {
     const { paymentPayload, paymentRequirements } = req.body as {
       paymentPayload: PaymentPayload;
@@ -200,6 +170,8 @@ app.post("/verify", async (req, res) => {
     };
 
     if (!paymentPayload || !paymentRequirements) {
+      verifyCounter.inc({ status: "invalid_request" });
+      endTimer();
       return res.status(400).json({
         error: "Missing paymentPayload or paymentRequirements",
       });
@@ -207,9 +179,14 @@ app.post("/verify", async (req, res) => {
 
     const response: VerifyResponse = await facilitator.verify(paymentPayload, paymentRequirements);
 
+    verifyCounter.inc({ status: response.isValid ? "success" : "failure" });
+    endTimer();
+
     return res.json(response);
   } catch (error) {
     console.error("Verify error:", error);
+    verifyCounter.inc({ status: "error" });
+    endTimer();
     res.status(500).json({
       error: error instanceof Error ? error.message : "Unknown error",
     });
@@ -261,6 +238,20 @@ app.post("/settle", async (req, res) => {
  */
 app.get("/", (req, res) => {
   res.redirect("https://www.openmid.xyz/docs");
+});
+
+/**
+ * GET /metrics
+ * Prometheus metrics endpoint
+ */
+app.get("/metrics", async (req, res) => {
+  try {
+    res.setHeader("Content-Type", metricsRegister.contentType);
+    res.send(await metricsRegister.metrics());
+  } catch (error) {
+    console.error("Metrics error:", error);
+    res.status(500).send("Error generating metrics");
+  }
 });
 
 /**
@@ -390,6 +381,119 @@ app.get("/agent", async (req, res) => {
   }
 });
 
+/**
+ * GET /reputation
+ * Get reputation summary for an agent
+ */
+app.get("/reputation", async (req, res) => {
+  try {
+    const { agentId, network = "eip155:84532" } = req.query;
+
+    if (!agentId) {
+      return res.status(400).json({
+        success: false,
+        error: "agentId parameter is required",
+      });
+    }
+
+    const summary = await getReputationSummary(agentId as string, network as string);
+
+    if (!summary) {
+      return res.status(404).json({
+        success: false,
+        error: "Could not fetch reputation summary",
+      });
+    }
+
+    res.json({
+      success: true,
+      agentId,
+      count: summary.count.toString(),
+      totalScore: summary.totalScore.toString(),
+      averageScore: summary.averageScore,
+    });
+  } catch (error) {
+    console.error("Reputation error:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+});
+
+/**
+ * POST /feedback
+ * Submit feedback for an agent (v1: direct submission, no feedbackAuth)
+ */
+app.post("/feedback", async (req, res) => {
+  try {
+    const {
+      agentId,
+      score,
+      tag1,
+      tag2,
+      endpoint,
+      feedbackURI,
+      feedbackHash,
+      network = "eip155:84532",
+    } = req.body;
+
+    if (!agentId) {
+      return res.status(400).json({
+        success: false,
+        error: "agentId is required",
+      });
+    }
+
+    if (score === undefined || score === null) {
+      return res.status(400).json({
+        success: false,
+        error: "score is required",
+      });
+    }
+
+    if (score < 0 || score > 100) {
+      return res.status(400).json({
+        success: false,
+        error: "score must be between 0 and 100",
+      });
+    }
+
+    const result = await giveFeedback({
+      agentId,
+      score,
+      tag1,
+      tag2,
+      endpoint,
+      feedbackURI,
+      feedbackHash,
+      network,
+    });
+
+    if (result.success) {
+      feedbackCounter.inc({ network, status: "success" });
+      res.json({
+        success: true,
+        agentId,
+        txHash: result.txHash,
+      });
+    } else {
+      feedbackCounter.inc({ network, status: "failure" });
+      res.status(400).json({
+        success: false,
+        error: result.error,
+      });
+    }
+  } catch (error) {
+    feedbackCounter.inc({ network: "unknown", status: "error" });
+    console.error("Feedback error:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+});
+
 // ============================================================================
 // Server Startup
 // ============================================================================
@@ -397,10 +501,10 @@ app.get("/agent", async (req, res) => {
 app.listen(parseInt(PORT), () => {
   console.log(`
 ╔════════════════════════════════════════════════════════╗
-║           x402 TypeScript Facilitator                  ║
+║           x402 ERC-8004 v1 Facilitator                 ║
 ╠════════════════════════════════════════════════════════╣
 ║  Network:    eip155:84532, eip155:8453                 ║
-║  Extensions: erc-8004                                  ║
+║  Extensions: erc-8004 v1                               ║
 ║                                                        ║
 ║  Endpoints:                                            ║
 ║  • POST /verify              (verify payment)          ║
@@ -408,6 +512,8 @@ app.listen(parseInt(PORT), () => {
 ║  • GET  /supported           (get supported kinds)     ║
 ║  • POST /register            (register agent)          ║
 ║  • GET  /agent               (get agent by address)    ║
+║  • GET  /reputation          (get reputation summary)  ║
+║  • POST /feedback            (submit feedback)         ║
 ╚════════════════════════════════════════════════════════╝
   `);
 

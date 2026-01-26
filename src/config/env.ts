@@ -8,15 +8,22 @@ function normalizePrivateKey(key: string | undefined): string | undefined {
   return key.startsWith("0x") ? key : `0x${key}`;
 }
 
+// Base network RPC (for x402 payment facilitation)
 export const RPC_URL = process.env.RPC_URL as string;
 
-// ERC-8004 v1 Contract Addresses (Base Sepolia)
-// Identity Registry: 0xdc527768082c489e0ee228d24d3cfa290214f387
-// Reputation Registry: 0xd1f3ed781c16d69fb6b2fe3d0d9cb11aa3529fc8
-export const ERC8004_IDENTITY_REGISTRY_ADDRESS = process.env
-  .ERC8004_IDENTITY_REGISTRY_ADDRESS as `0x${string}`;
-export const ERC8004_REPUTATION_REGISTRY_ADDRESS = process.env
-  .ERC8004_REPUTATION_REGISTRY_ADDRESS as `0x${string}`;
+// Ethereum Sepolia RPC (for ERC-8004 registry operations)
+export const ETH_SEPOLIA_RPC_URL =
+  process.env.ETH_SEPOLIA_RPC_URL || "https://sepolia.etherscan.io";
+
+// ERC-8004 Contract Addresses (Ethereum Sepolia)
+// Identity Registry: 0x8004A818BFB912233c491871b3d84c89A494BD9e
+// Reputation Registry: 0x8004B663056A597Dffe9eCcC1965A193B7388713
+export const ERC8004_IDENTITY_REGISTRY_ADDRESS = (process.env
+  .ERC8004_IDENTITY_REGISTRY_ADDRESS ||
+  "0x8004A818BFB912233c491871b3d84c89A494BD9e") as `0x${string}`;
+export const ERC8004_REPUTATION_REGISTRY_ADDRESS = (process.env
+  .ERC8004_REPUTATION_REGISTRY_ADDRESS ||
+  "0x8004B663056A597Dffe9eCcC1965A193B7388713") as `0x${string}`;
 export const DELEGATE_CONTRACT_ADDRESS = process.env.DELEGATE_CONTRACT_ADDRESS as `0x${string}`;
 export const PORT = process.env.PORT || "4022";
 export const REDIS_URL = process.env.REDIS_URL;
@@ -33,17 +40,13 @@ if (!RPC_URL) {
   process.exit(1);
 }
 
-if (!ERC8004_IDENTITY_REGISTRY_ADDRESS) {
-  console.error("❌ ERC8004_IDENTITY_REGISTRY_ADDRESS environment variable is required");
-  process.exit(1);
-}
-
-if (!ERC8004_REPUTATION_REGISTRY_ADDRESS) {
-  console.error("❌ ERC8004_REPUTATION_REGISTRY_ADDRESS environment variable is required");
-  process.exit(1);
-}
-
 if (!DELEGATE_CONTRACT_ADDRESS) {
   console.error("❌ DELEGATE_CONTRACT_ADDRESS environment variable is required");
   process.exit(1);
 }
+
+console.log("📋 ERC-8004 Configuration:");
+console.log(`   Identity Registry: ${ERC8004_IDENTITY_REGISTRY_ADDRESS}`);
+console.log(`   Reputation Registry: ${ERC8004_REPUTATION_REGISTRY_ADDRESS}`);
+console.log(`   Delegate Contract: ${DELEGATE_CONTRACT_ADDRESS}`);
+console.log(`   Ethereum Sepolia RPC: ${ETH_SEPOLIA_RPC_URL}`);

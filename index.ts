@@ -83,6 +83,11 @@ const register = async (context: FacilitatorSettleResultContext) => {
   const paymentPayload = context.paymentPayload;
   const extensions = paymentPayload.extensions;
 
+  console.log(`🔍 [register] Starting registration check`);
+  console.log(`   Payment network: ${paymentPayload.accepted?.network}`);
+  console.log(`   PayTo address: ${paymentPayload.accepted?.payTo}`);
+  console.log(`   Extensions present: ${Object.keys(extensions || {}).join(", ") || "none"}`);
+
   const registeryInfo = extensions?.["erc-8004"] as
     | {
         registerAuth?: Authorization;
@@ -90,28 +95,52 @@ const register = async (context: FacilitatorSettleResultContext) => {
         metadata?: { key: string; value: string }[];
       }
     | undefined;
+
   if (!registeryInfo) {
+    console.log(`⏭️ [register] No erc-8004 extension found, skipping`);
     return;
   }
+
+  console.log(`📋 [register] Found erc-8004 extension:`);
+  console.log(`   tokenURI: ${registeryInfo.tokenURI || "(none)"}`);
+  console.log(`   metadata entries: ${registeryInfo.metadata?.length || 0}`);
+  console.log(`   has registerAuth: ${!!registeryInfo.registerAuth}`);
 
   const agentAddress = (paymentPayload.accepted.payTo as Address).toLowerCase();
+  console.log(`🔎 [register] Checking if agent ${agentAddress} is already registered...`);
+
   const agentId = await agentAddressStore.get(agentAddress);
   if (agentId) {
-    console.log(`✅ Agent ${agentId} already registered, skipping registration`);
+    console.log(`✅ [register] Agent ${agentId} already registered, skipping registration`);
     return;
   }
 
+  console.log(`📝 [register] Agent not found in store, proceeding with registration`);
+
   const registerAuth = registeryInfo.registerAuth;
+  if (!registerAuth) {
+    console.log(`❌ [register] No registerAuth provided, cannot proceed`);
+    return;
+  }
+
+  console.log(`🔐 [register] Authorization details:`);
+  console.log(`   chainId: ${(registerAuth as any).chainId}`);
+  console.log(`   address: ${(registerAuth as any).address}`);
+  console.log(`   nonce: ${(registerAuth as any).nonce}`);
 
   try {
+    // viem's Authorization type expects chainId and nonce as number, not BigInt
     const deserializedAuthorization = {
-      chainId: BigInt((registerAuth as any).chainId),
+      chainId: Number((registerAuth as any).chainId),
       address: (registerAuth as any).address as Address,
-      nonce: BigInt((registerAuth as any).nonce),
-      yParity: (registerAuth as any).yParity as 0 | 1,
+      nonce: Number((registerAuth as any).nonce),
+      yParity: Number((registerAuth as any).yParity) as 0 | 1,
       r: (registerAuth as any).r as `0x${string}`,
       s: (registerAuth as any).s as `0x${string}`,
-    } as unknown as Authorization;
+    } as Authorization;
+
+    console.log(`🚀 [register] Calling registerAgent service...`);
+    const startTime = Date.now();
 
     const result = await registerAgent({
       agentAddress: agentAddress as Address,
@@ -121,7 +150,11 @@ const register = async (context: FacilitatorSettleResultContext) => {
       network: paymentPayload.accepted?.network,
     });
 
+    const duration = Date.now() - startTime;
+    console.log(`⏱️ [register] Registration call completed in ${duration}ms`);
+
     if (!result.success) {
+      console.log(`❌ [register] Registration failed: ${result.error}`);
       registrationCounter.inc({
         network: paymentPayload.accepted?.network || "unknown",
         status: "failure",
@@ -129,10 +162,15 @@ const register = async (context: FacilitatorSettleResultContext) => {
       return;
     }
 
+    console.log(`✅ [register] Registration successful:`);
+    console.log(`   agentId: ${result.agentId}`);
+    console.log(`   txHash: ${result.txHash}`);
+    console.log(`   network: ${result.network}`);
+
     if (result.agentId) {
       await agentAddressStore.set(agentAddress.toLowerCase(), result.agentId);
       console.log(
-        `📝 Stored v2 agentAddress (${agentAddress}) -> agentId (${result.agentId}) mapping`,
+        `📝 [register] Stored agentAddress (${agentAddress}) -> agentId (${result.agentId}) mapping`,
       );
       registrationCounter.inc({
         network: paymentPayload.accepted?.network || "unknown",
@@ -140,7 +178,7 @@ const register = async (context: FacilitatorSettleResultContext) => {
       });
     }
   } catch (error) {
-    console.error(`❌ Failed to register agent: ${error}`);
+    console.error(`❌ [register] Failed to register agent: ${error}`);
     registrationCounter.inc({
       network: paymentPayload.accepted?.network || "unknown",
       status: "error",
@@ -257,27 +295,37 @@ app.get("/metrics", async (req, res) => {
 /**
  * POST /register
  * Register a new agent with ERC-8004
+ * Note: Always uses Ethereum Sepolia for ERC-8004 registry
  */
 app.post("/register", async (req, res) => {
   try {
     const {
       tokenURI,
       metadata,
-      network = "base-sepolia",
+      network = "eip155:11155111",
       x402Version = 1,
       agentAddress,
       authorization,
     } = req.body;
 
+    console.log(`🔍 [POST /register] Received registration request`);
+    console.log(`   agentAddress: ${agentAddress}`);
+    console.log(`   tokenURI: ${tokenURI || "(none)"}`);
+    console.log(`   metadata entries: ${metadata?.length || 0}`);
+    console.log(`   network: ${network}`);
+    console.log(`   x402Version: ${x402Version}`);
+
     // For v1, agentAddress and authorization are required
     if (x402Version === 1) {
       if (!agentAddress) {
+        console.log(`❌ [POST /register] Missing agentAddress`);
         return res.status(400).json({
           success: false,
           error: "agentAddress is required for x402Version 1",
         });
       }
       if (!authorization) {
+        console.log(`❌ [POST /register] Missing authorization`);
         return res.status(400).json({
           success: false,
           error: "authorization is required for x402Version 1 (EIP-7702)",
@@ -285,17 +333,23 @@ app.post("/register", async (req, res) => {
       }
     }
 
-    // Deserialize authorization - convert string values back to BigInt for viem
-    // Note: viem's Authorization type expects numbers, but EIP-7702 uses BigInt
-    // We'll use type assertion since the values are correct at runtime
+    console.log(`🔐 [POST /register] Authorization details:`);
+    console.log(`   chainId: ${(authorization as any).chainId}`);
+    console.log(`   address: ${(authorization as any).address}`);
+    console.log(`   nonce: ${(authorization as any).nonce}`);
+
+    // viem's Authorization type expects chainId and nonce as number, not BigInt
     const deserializedAuthorization = {
-      chainId: BigInt((authorization as any).chainId),
+      chainId: Number((authorization as any).chainId),
       address: (authorization as any).address as Address,
-      nonce: BigInt((authorization as any).nonce),
-      yParity: (authorization as any).yParity as 0 | 1,
+      nonce: Number((authorization as any).nonce),
+      yParity: Number((authorization as any).yParity) as 0 | 1,
       r: (authorization as any).r as `0x${string}`,
       s: (authorization as any).s as `0x${string}`,
-    } as unknown as Authorization;
+    } as Authorization;
+
+    console.log(`🚀 [POST /register] Calling registerAgent service...`);
+    const startTime = Date.now();
 
     const result = await registerAgent({
       agentAddress: agentAddress as Address,
@@ -305,17 +359,25 @@ app.post("/register", async (req, res) => {
       network,
     });
 
+    const duration = Date.now() - startTime;
+    console.log(`⏱️ [POST /register] Registration call completed in ${duration}ms`);
+
     if (result.success && result.agentId) {
-      // For v1, store agentAddress -> agentId mapping
-      if (x402Version === 1 && agentAddress) {
+      console.log(`✅ [POST /register] Registration successful:`);
+      console.log(`   agentId: ${result.agentId}`);
+      console.log(`   txHash: ${result.txHash}`);
+
+      // Store agentAddress -> agentId mapping
+      if (agentAddress) {
         await agentAddressStore.set(agentAddress.toLowerCase(), result.agentId);
         console.log(
-          `📝 Stored v1 agentAddress (${agentAddress}) -> agentId (${result.agentId}) mapping`,
+          `📝 [POST /register] Stored agentAddress (${agentAddress}) -> agentId (${result.agentId}) mapping`,
         );
       }
 
       res.json(result);
     } else {
+      console.log(`❌ [POST /register] Registration failed: ${result.error}`);
       res.status(400).json(result);
     }
   } catch (error) {
@@ -384,10 +446,11 @@ app.get("/agent", async (req, res) => {
 /**
  * GET /reputation
  * Get reputation summary for an agent
+ * Note: Always uses Ethereum Sepolia for ERC-8004 registry
  */
 app.get("/reputation", async (req, res) => {
   try {
-    const { agentId, network = "eip155:84532" } = req.query;
+    const { agentId, network = "eip155:11155111" } = req.query;
 
     if (!agentId) {
       return res.status(400).json({
@@ -409,7 +472,8 @@ app.get("/reputation", async (req, res) => {
       success: true,
       agentId,
       count: summary.count.toString(),
-      totalScore: summary.totalScore.toString(),
+      summaryValue: summary.summaryValue.toString(),
+      summaryValueDecimals: summary.summaryValueDecimals,
       averageScore: summary.averageScore,
     });
   } catch (error) {
@@ -423,7 +487,8 @@ app.get("/reputation", async (req, res) => {
 
 /**
  * POST /feedback
- * Submit feedback for an agent (v1: direct submission, no feedbackAuth)
+ * Submit feedback for an agent
+ * Note: Always uses Ethereum Sepolia for ERC-8004 registry
  */
 app.post("/feedback", async (req, res) => {
   try {
@@ -435,7 +500,7 @@ app.post("/feedback", async (req, res) => {
       endpoint,
       feedbackURI,
       feedbackHash,
-      network = "eip155:84532",
+      network = "eip155:11155111",
     } = req.body;
 
     if (!agentId) {
@@ -501,10 +566,14 @@ app.post("/feedback", async (req, res) => {
 app.listen(parseInt(PORT), () => {
   console.log(`
 ╔════════════════════════════════════════════════════════╗
-║           x402 ERC-8004 v1 Facilitator                 ║
+║           x402 ERC-8004 Facilitator                    ║
 ╠════════════════════════════════════════════════════════╣
-║  Network:    eip155:84532, eip155:8453                 ║
-║  Extensions: erc-8004 v1                               ║
+║  x402 Payment Networks:                                ║
+║  • eip155:84532 (Base Sepolia)                         ║
+║  • eip155:8453  (Base Mainnet)                         ║
+║                                                        ║
+║  ERC-8004 Registry Network:                            ║
+║  • eip155:11155111 (Ethereum Sepolia)                  ║
 ║                                                        ║
 ║  Endpoints:                                            ║
 ║  • POST /verify              (verify payment)          ║

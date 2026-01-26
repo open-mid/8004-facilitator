@@ -7,7 +7,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
-  RPC_URL,
+  ETH_SEPOLIA_RPC_URL,
   ERC8004_REPUTATION_REGISTRY_ADDRESS,
   FACILITATOR_PRIVATE_KEY,
 } from "../config/env";
@@ -33,13 +33,14 @@ export type FeedbackResult = {
 
 export type ReputationSummary = {
   count: bigint;
-  totalScore: bigint;
+  summaryValue: bigint;
+  summaryValueDecimals: number;
   averageScore: number;
 };
 
 /**
  * Submit feedback for an agent to the Reputation Registry
- * v1: No feedbackAuth required - direct submission
+ * Uses Ethereum Sepolia - new contract with int128 value and valueDecimals
  */
 export async function giveFeedback(params: GiveFeedbackParams): Promise<FeedbackResult> {
   const {
@@ -53,9 +54,11 @@ export async function giveFeedback(params: GiveFeedbackParams): Promise<Feedback
     network,
   } = params;
 
-  const chain = mapX402NetworkToChain(network, RPC_URL);
+  // Force Ethereum Sepolia for reputation registry
+  const registryNetwork = "eip155:11155111";
+  const chain = mapX402NetworkToChain(registryNetwork, ETH_SEPOLIA_RPC_URL);
   if (!chain) {
-    return { success: false, error: `Unsupported network: ${network}` };
+    return { success: false, error: `Unsupported network: ${registryNetwork}` };
   }
 
   // Validate score
@@ -65,16 +68,21 @@ export async function giveFeedback(params: GiveFeedbackParams): Promise<Feedback
 
   try {
     const account = privateKeyToAccount(FACILITATOR_PRIVATE_KEY as `0x${string}`);
-    const walletClient = createWalletClient({ account, chain, transport: http(RPC_URL) });
-    const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
+    const walletClient = createWalletClient({ account, chain, transport: http(ETH_SEPOLIA_RPC_URL) });
+    const publicClient = createPublicClient({ chain, transport: http(ETH_SEPOLIA_RPC_URL) });
 
-    console.log(`📝 Submitting feedback for agent ${agentId}: score=${score}, tag1=${tag1}, tag2=${tag2}`);
+    // Convert score (0-100) to new contract format: int128 value with uint8 valueDecimals
+    // score: 85 -> value: 85n, valueDecimals: 0
+    const value = BigInt(score);
+    const valueDecimals = 0;
+
+    console.log(`📝 Submitting feedback for agent ${agentId}: value=${value}, decimals=${valueDecimals}, tag1=${tag1}, tag2=${tag2}`);
 
     const hash = await walletClient.writeContract({
       address: ERC8004_REPUTATION_REGISTRY_ADDRESS,
       abi: reputationRegistryAbi,
       functionName: "giveFeedback",
-      args: [BigInt(agentId), score, tag1, tag2, endpoint, feedbackURI, feedbackHash],
+      args: [BigInt(agentId), value, valueDecimals, tag1, tag2, endpoint, feedbackURI, feedbackHash],
     });
 
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
@@ -93,32 +101,43 @@ export async function giveFeedback(params: GiveFeedbackParams): Promise<Feedback
 
 /**
  * Get reputation summary for an agent
+ * Uses Ethereum Sepolia - new contract with filtering parameters
  */
 export async function getReputationSummary(
   agentId: string,
   network: string,
 ): Promise<ReputationSummary | null> {
-  const chain = mapX402NetworkToChain(network, RPC_URL);
+  // Force Ethereum Sepolia for reputation registry
+  const registryNetwork = "eip155:11155111";
+  const chain = mapX402NetworkToChain(registryNetwork, ETH_SEPOLIA_RPC_URL);
   if (!chain) {
-    console.error(`Unsupported network: ${network}`);
+    console.error(`Unsupported network: ${registryNetwork}`);
     return null;
   }
 
-  const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
+  const publicClient = createPublicClient({ chain, transport: http(ETH_SEPOLIA_RPC_URL) });
 
   try {
+    // New contract signature: getSummary(agentId, clientAddresses[], tag1, tag2)
+    // Pass empty arrays/strings to get all feedback
     const result = (await publicClient.readContract({
       address: ERC8004_REPUTATION_REGISTRY_ADDRESS,
       abi: reputationRegistryAbi,
       functionName: "getSummary",
-      args: [BigInt(agentId)],
-    })) as [bigint, bigint];
+      args: [BigInt(agentId), [], "", ""],
+    })) as [bigint, bigint, number];
 
-    const [count, totalScore] = result;
+    const [count, summaryValue, summaryValueDecimals] = result;
+
+    // Calculate average considering decimals
+    const divisor = 10 ** summaryValueDecimals;
+    const averageScore = count > 0n ? Number(summaryValue) / divisor / Number(count) : 0;
+
     return {
       count,
-      totalScore,
-      averageScore: count > 0n ? Number(totalScore) / Number(count) : 0,
+      summaryValue,
+      summaryValueDecimals,
+      averageScore,
     };
   } catch (e: any) {
     console.error("Failed to get reputation summary:", e?.message || e);
@@ -127,41 +146,47 @@ export async function getReputationSummary(
 }
 
 /**
- * Get feedback count for an agent from a specific client
+ * Get last feedback index for an agent from a specific client
+ * Uses Ethereum Sepolia - new contract uses getLastIndex instead of getFeedbackCount
  */
-export async function getFeedbackCount(
+export async function getLastFeedbackIndex(
   agentId: string,
   clientAddress: Address,
   network: string,
 ): Promise<number | null> {
-  const chain = mapX402NetworkToChain(network, RPC_URL);
+  // Force Ethereum Sepolia for reputation registry
+  const registryNetwork = "eip155:11155111";
+  const chain = mapX402NetworkToChain(registryNetwork, ETH_SEPOLIA_RPC_URL);
   if (!chain) return null;
 
-  const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
+  const publicClient = createPublicClient({ chain, transport: http(ETH_SEPOLIA_RPC_URL) });
 
   try {
-    const count = (await publicClient.readContract({
+    const lastIndex = (await publicClient.readContract({
       address: ERC8004_REPUTATION_REGISTRY_ADDRESS,
       abi: reputationRegistryAbi,
-      functionName: "getFeedbackCount",
+      functionName: "getLastIndex",
       args: [BigInt(agentId), clientAddress],
     })) as bigint;
 
-    return Number(count);
+    return Number(lastIndex);
   } catch (e: any) {
-    console.error("Failed to get feedback count:", e?.message || e);
+    console.error("Failed to get last feedback index:", e?.message || e);
     return null;
   }
 }
 
 /**
  * Get all clients who have given feedback to an agent
+ * Uses Ethereum Sepolia
  */
 export async function getClients(agentId: string, network: string): Promise<Address[] | null> {
-  const chain = mapX402NetworkToChain(network, RPC_URL);
+  // Force Ethereum Sepolia for reputation registry
+  const registryNetwork = "eip155:11155111";
+  const chain = mapX402NetworkToChain(registryNetwork, ETH_SEPOLIA_RPC_URL);
   if (!chain) return null;
 
-  const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
+  const publicClient = createPublicClient({ chain, transport: http(ETH_SEPOLIA_RPC_URL) });
 
   try {
     const clients = (await publicClient.readContract({

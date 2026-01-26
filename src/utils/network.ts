@@ -1,4 +1,4 @@
-import { anvil, base, baseSepolia, type Chain } from "viem/chains";
+import { anvil, base, baseSepolia, sepolia, type Chain } from "viem/chains";
 
 export function isLocalRPC(rpcUrl?: string): boolean {
   if (!rpcUrl) return false;
@@ -27,6 +27,8 @@ export function mapX402NetworkToChain(network?: string, rpcUrl?: string): Chain 
 
     // Map known chain IDs to viem chains
     switch (chainId) {
+      case 11155111: // Ethereum Sepolia
+        return sepolia;
       case 84532: // Base Sepolia
         return baseSepolia;
       case 8453: // Base Mainnet
@@ -43,6 +45,8 @@ export function mapX402NetworkToChain(network?: string, rpcUrl?: string): Chain 
 
   // Handle simple network names (V1 format)
   switch (network) {
+    case "eth-sepolia":
+      return sepolia;
     case "base-sepolia":
       return baseSepolia;
     case "base":

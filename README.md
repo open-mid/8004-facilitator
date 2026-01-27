@@ -2,16 +2,23 @@
 
 A facilitator acts as the service access point for x402 payments: verifying user requests, settling payments on-chain. This implementation extends that flow with ERC-8004 identity and feedback primitives, enabling fully onchain agent registration and authenticated service evaluation.
 
-**Payment Network**: Base Mainnet, Base Sepolia  
-**Facilitator URL**: https://facilitator.openmid.xyz  
-**Documentation**: https://www.openmid.xyz/docs  
-**ERC-8004 Network**: Base Sepolia  
-**Delegation Contract**: `0xFdc90fCC6929a2f42a9D714bD10520eEE98bD378`
+**Payment Network**: Base Mainnet, Base Sepolia
+**ERC-8004 Registry Network**: Ethereum Sepolia
+**Facilitator URL**: https://facilitator.openmid.xyz
+**Documentation**: https://www.openmid.xyz/docs
+
+### Contract Addresses (Ethereum Sepolia)
+
+| Contract | Address |
+|----------|---------|
+| Identity Registry | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
+| Reputation Registry | `0x8004B663056A597Dffe9eCcC1965A193B7388713` |
+| Delegation Contract | `0x252367B463f77EFe33c151E9d9821788090EC4b5` |
 
 ## Features
 
-- **Payment Processing**: Verify and settle payments for both x402 v1 and v2
-- **ERC-8004 Integration**: Agent registration via EIP-7702 delegation
+- **Payment Processing**: Verify and settle payments for both x402 v1 and v2 (Base Sepolia / Base Mainnet)
+- **ERC-8004 Integration**: Agent registration via EIP-7702 delegation (Ethereum Sepolia)
 - **Feedback System**: Enables agent signing feedback auth within the x402 payment flow
 
 ### ERC-8004 Registration with x402 V2 extension
@@ -45,12 +52,14 @@ app.use(
 
 Simply by passing "erc-8004" key and the 7702 auth, the facilitator can register the agent automatically to the 8004 registry. For full example, please see `examples/v2-server`.
 
+**Note**: The `registerAuth` must be signed for Ethereum Sepolia (chainId: 11155111), while x402 payments are processed on Base networks.
+
 ## Quick Start
 
 ### Prerequisites
 
 - Node.js 18+
-- Environment variables configured (see `.env`)
+- Environment variables configured (see `.env.example`)
 
 ### Installation
 
@@ -65,11 +74,16 @@ Create a `.env` file with the following variables:
 ```env
 # Required
 FACILITATOR_PRIVATE_KEY=0x...
-ERC8004_IDENTITY_REGISTRY_ADDRESS=0x...
-DELEGATE_CONTRACT_ADDRESS=0xFdc90fCC6929a2f42a9D714bD10520eEE98bD378
-```
 
-**Note**: The delegation contract address above is for Base Sepolia. The facilitator is available at https://facilitator-testnet.openmid.xyz
+# x402 Payment Network (Base Sepolia)
+RPC_URL=https://sepolia.base.org
+
+# ERC-8004 Registry Network (Ethereum Sepolia)
+ETH_SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+ERC8004_IDENTITY_REGISTRY_ADDRESS=0x8004A818BFB912233c491871b3d84c89A494BD9e
+ERC8004_REPUTATION_REGISTRY_ADDRESS=0x8004B663056A597Dffe9eCcC1965A193B7388713
+DELEGATE_CONTRACT_ADDRESS=0x252367B463f77EFe33c151E9d9821788090EC4b5
+```
 
 ### Run
 
@@ -82,6 +96,9 @@ npm run dev
 - `POST /verify` - Verify a payment
 - `POST /settle` - Settle a payment on-chain
 - `POST /register` - Register an agent with ERC-8004 (EIP-7702)
+- `GET /agent` - Get agent ID by address
+- `GET /reputation` - Get reputation summary for an agent
+- `POST /feedback` - Submit feedback for an agent
 - `GET /supported` - Get supported payment schemes
 
 ## Example Server Integrations

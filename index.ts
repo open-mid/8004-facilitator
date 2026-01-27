@@ -18,8 +18,19 @@ import { createFacilitatorSigners } from "./src/utils/signers";
 
 // Import services
 import { registerAgent } from "./src/services/registerService";
-import { generateClientFeedbackAuth } from "./src/services/feedbackService";
+import { giveFeedback, getReputationSummary } from "./src/services/reputationService";
 import { createRedisStore } from "./src/services/redisStore";
+
+// Import metrics
+import {
+  register as metricsRegister,
+  settlementCounter,
+  registrationCounter,
+  feedbackCounter,
+  settlementDuration,
+  verifyCounter,
+  verifyDuration,
+} from "./src/services/metrics";
 
 // ============================================================================
 // Configuration & Initialization
@@ -48,21 +59,34 @@ facilitator.registerV1(["base"] as any, new ExactEvmSchemeV1Facilitator(baseMain
 // Data Stores
 // ============================================================================
 
-const feedbackAuthStore = createRedisStore<{ agentId: string; feedbackAuth: string }>(REDIS_URL);
 const agentAddressStore = createRedisStore<string>(REDIS_URL);
 
 // ============================================================================
 // Extension Setup
 // ============================================================================
 facilitator.registerExtension("erc-8004").onAfterSettle(async context => {
-  await register(context);
-  // feedback happens async
-  feedback(context);
+  const network = context.paymentPayload.accepted?.network || "unknown";
+
+  // Fire-and-forget: Don't block settlement response while waiting for registration
+  // Registration happens on Ethereum Sepolia and can take 12-15+ seconds
+  register(context)
+    .then(() => {
+      settlementCounter.inc({ network, status: "success" });
+    })
+    .catch(error => {
+      settlementCounter.inc({ network, status: "error" });
+      console.error("Background registration error:", error);
+    });
 });
 
 const register = async (context: FacilitatorSettleResultContext) => {
   const paymentPayload = context.paymentPayload;
   const extensions = paymentPayload.extensions;
+
+  console.log(`🔍 [register] Starting registration check`);
+  console.log(`   Payment network: ${paymentPayload.accepted?.network}`);
+  console.log(`   PayTo address: ${paymentPayload.accepted?.payTo}`);
+  console.log(`   Extensions present: ${Object.keys(extensions || {}).join(", ") || "none"}`);
 
   const registeryInfo = extensions?.["erc-8004"] as
     | {
@@ -71,28 +95,52 @@ const register = async (context: FacilitatorSettleResultContext) => {
         metadata?: { key: string; value: string }[];
       }
     | undefined;
+
   if (!registeryInfo) {
+    console.log(`⏭️ [register] No erc-8004 extension found, skipping`);
     return;
   }
+
+  console.log(`📋 [register] Found erc-8004 extension:`);
+  console.log(`   tokenURI: ${registeryInfo.tokenURI || "(none)"}`);
+  console.log(`   metadata entries: ${registeryInfo.metadata?.length || 0}`);
+  console.log(`   has registerAuth: ${!!registeryInfo.registerAuth}`);
 
   const agentAddress = (paymentPayload.accepted.payTo as Address).toLowerCase();
+  console.log(`🔎 [register] Checking if agent ${agentAddress} is already registered...`);
+
   const agentId = await agentAddressStore.get(agentAddress);
   if (agentId) {
-    console.log(`✅ Agent ${agentId} already registered, skipping registration`);
+    console.log(`✅ [register] Agent ${agentId} already registered, skipping registration`);
     return;
   }
 
+  console.log(`📝 [register] Agent not found in store, proceeding with registration`);
+
   const registerAuth = registeryInfo.registerAuth;
+  if (!registerAuth) {
+    console.log(`❌ [register] No registerAuth provided, cannot proceed`);
+    return;
+  }
+
+  console.log(`🔐 [register] Authorization details:`);
+  console.log(`   chainId: ${(registerAuth as any).chainId}`);
+  console.log(`   address: ${(registerAuth as any).address}`);
+  console.log(`   nonce: ${(registerAuth as any).nonce}`);
 
   try {
+    // viem's Authorization type expects chainId and nonce as number, not BigInt
     const deserializedAuthorization = {
-      chainId: BigInt((registerAuth as any).chainId),
+      chainId: Number((registerAuth as any).chainId),
       address: (registerAuth as any).address as Address,
-      nonce: BigInt((registerAuth as any).nonce),
-      yParity: (registerAuth as any).yParity as 0 | 1,
+      nonce: Number((registerAuth as any).nonce),
+      yParity: Number((registerAuth as any).yParity) as 0 | 1,
       r: (registerAuth as any).r as `0x${string}`,
       s: (registerAuth as any).s as `0x${string}`,
-    } as unknown as Authorization;
+    } as Authorization;
+
+    console.log(`🚀 [register] Calling registerAgent service...`);
+    const startTime = Date.now();
 
     const result = await registerAgent({
       agentAddress: agentAddress as Address,
@@ -102,82 +150,40 @@ const register = async (context: FacilitatorSettleResultContext) => {
       network: paymentPayload.accepted?.network,
     });
 
+    const duration = Date.now() - startTime;
+    console.log(`⏱️ [register] Registration call completed in ${duration}ms`);
+
     if (!result.success) {
+      console.log(`❌ [register] Registration failed: ${result.error}`);
+      registrationCounter.inc({
+        network: paymentPayload.accepted?.network || "unknown",
+        status: "failure",
+      });
       return;
     }
+
+    console.log(`✅ [register] Registration successful:`);
+    console.log(`   agentId: ${result.agentId}`);
+    console.log(`   txHash: ${result.txHash}`);
+    console.log(`   network: ${result.network}`);
 
     if (result.agentId) {
       await agentAddressStore.set(agentAddress.toLowerCase(), result.agentId);
       console.log(
-        `📝 Stored v2 agentAddress (${agentAddress}) -> agentId (${result.agentId}) mapping`,
+        `📝 [register] Stored agentAddress (${agentAddress}) -> agentId (${result.agentId}) mapping`,
       );
+      registrationCounter.inc({
+        network: paymentPayload.accepted?.network || "unknown",
+        status: "success",
+      });
     }
   } catch (error) {
-    console.error(`❌ Failed to register agent: ${error}`);
+    console.error(`❌ [register] Failed to register agent: ${error}`);
+    registrationCounter.inc({
+      network: paymentPayload.accepted?.network || "unknown",
+      status: "error",
+    });
     return;
-  }
-};
-
-const feedback = async (context: FacilitatorSettleResultContext) => {
-  const paymentPayload = context.paymentPayload;
-  const extensions = paymentPayload.extensions;
-
-  const feedbackInfo = extensions?.["erc-8004"] as
-    | { feedbackAuthEndpoint?: string; feedbackEnabled?: boolean }
-    | undefined;
-
-  if (!feedbackInfo || !feedbackInfo.feedbackEnabled) {
-    console.log("No feedback enabled for v2, skipping feedbackAuth generation");
-    return;
-  }
-
-  const clientAddress = (paymentPayload.payload as any)?.authorization?.from;
-  if (!clientAddress) {
-    console.warn("No client address found in payment payload, skipping feedbackAuth generation");
-    return;
-  }
-
-  const agentAddress = (paymentPayload.accepted.payTo as Address).toLowerCase();
-  if (!agentAddress) {
-    console.warn("No agent address found in payment payload, skipping feedbackAuth generation");
-    return;
-  }
-
-  const network = paymentPayload.accepted?.network || "base-sepolia";
-
-  const resourceUrl = paymentPayload.resource?.url;
-  const feedbackAuthEndpoint = (feedbackInfo as { feedbackAuthEndpoint?: string })
-    ?.feedbackAuthEndpoint;
-
-  let agentUrl: string | undefined;
-  if (resourceUrl) {
-    try {
-      const url = new URL(resourceUrl);
-      agentUrl = `${url.origin}${feedbackAuthEndpoint}`;
-    } catch {
-      console.error(`❌ Invalid resource URL: ${resourceUrl}`);
-      return;
-    }
-  }
-
-  const agentId = await agentAddressStore.get(agentAddress);
-  if (!agentId) {
-    console.error(`❌ Agent not found for client address: ${clientAddress}`);
-    return;
-  }
-
-  const result = await generateClientFeedbackAuth(
-    agentId,
-    clientAddress as Address,
-    network,
-    feedbackAuthStore,
-    agentUrl,
-  );
-
-  if (result.success) {
-    console.log(`✅ Generated feedbackAuth for v2 agent ${result.agentId}`);
-  } else {
-    console.error(`❌ Failed to generate feedbackAuth for v2: ${result.error}`);
   }
 };
 
@@ -193,6 +199,8 @@ app.use(express.json());
  * Verify a payment against requirements
  */
 app.post("/verify", async (req, res) => {
+  const endTimer = verifyDuration.startTimer();
+
   try {
     const { paymentPayload, paymentRequirements } = req.body as {
       paymentPayload: PaymentPayload;
@@ -200,6 +208,8 @@ app.post("/verify", async (req, res) => {
     };
 
     if (!paymentPayload || !paymentRequirements) {
+      verifyCounter.inc({ status: "invalid_request" });
+      endTimer();
       return res.status(400).json({
         error: "Missing paymentPayload or paymentRequirements",
       });
@@ -207,9 +217,14 @@ app.post("/verify", async (req, res) => {
 
     const response: VerifyResponse = await facilitator.verify(paymentPayload, paymentRequirements);
 
+    verifyCounter.inc({ status: response.isValid ? "success" : "failure" });
+    endTimer();
+
     return res.json(response);
   } catch (error) {
     console.error("Verify error:", error);
+    verifyCounter.inc({ status: "error" });
+    endTimer();
     res.status(500).json({
       error: error instanceof Error ? error.message : "Unknown error",
     });
@@ -264,29 +279,53 @@ app.get("/", (req, res) => {
 });
 
 /**
+ * GET /metrics
+ * Prometheus metrics endpoint
+ */
+app.get("/metrics", async (req, res) => {
+  try {
+    res.setHeader("Content-Type", metricsRegister.contentType);
+    res.send(await metricsRegister.metrics());
+  } catch (error) {
+    console.error("Metrics error:", error);
+    res.status(500).send("Error generating metrics");
+  }
+});
+
+/**
  * POST /register
  * Register a new agent with ERC-8004
+ * Note: Always uses Ethereum Sepolia for ERC-8004 registry
  */
 app.post("/register", async (req, res) => {
   try {
     const {
       tokenURI,
       metadata,
-      network = "base-sepolia",
+      network = "eip155:11155111",
       x402Version = 1,
       agentAddress,
       authorization,
     } = req.body;
 
+    console.log(`🔍 [POST /register] Received registration request`);
+    console.log(`   agentAddress: ${agentAddress}`);
+    console.log(`   tokenURI: ${tokenURI || "(none)"}`);
+    console.log(`   metadata entries: ${metadata?.length || 0}`);
+    console.log(`   network: ${network}`);
+    console.log(`   x402Version: ${x402Version}`);
+
     // For v1, agentAddress and authorization are required
     if (x402Version === 1) {
       if (!agentAddress) {
+        console.log(`❌ [POST /register] Missing agentAddress`);
         return res.status(400).json({
           success: false,
           error: "agentAddress is required for x402Version 1",
         });
       }
       if (!authorization) {
+        console.log(`❌ [POST /register] Missing authorization`);
         return res.status(400).json({
           success: false,
           error: "authorization is required for x402Version 1 (EIP-7702)",
@@ -294,17 +333,23 @@ app.post("/register", async (req, res) => {
       }
     }
 
-    // Deserialize authorization - convert string values back to BigInt for viem
-    // Note: viem's Authorization type expects numbers, but EIP-7702 uses BigInt
-    // We'll use type assertion since the values are correct at runtime
+    console.log(`🔐 [POST /register] Authorization details:`);
+    console.log(`   chainId: ${(authorization as any).chainId}`);
+    console.log(`   address: ${(authorization as any).address}`);
+    console.log(`   nonce: ${(authorization as any).nonce}`);
+
+    // viem's Authorization type expects chainId and nonce as number, not BigInt
     const deserializedAuthorization = {
-      chainId: BigInt((authorization as any).chainId),
+      chainId: Number((authorization as any).chainId),
       address: (authorization as any).address as Address,
-      nonce: BigInt((authorization as any).nonce),
-      yParity: (authorization as any).yParity as 0 | 1,
+      nonce: Number((authorization as any).nonce),
+      yParity: Number((authorization as any).yParity) as 0 | 1,
       r: (authorization as any).r as `0x${string}`,
       s: (authorization as any).s as `0x${string}`,
-    } as unknown as Authorization;
+    } as Authorization;
+
+    console.log(`🚀 [POST /register] Calling registerAgent service...`);
+    const startTime = Date.now();
 
     const result = await registerAgent({
       agentAddress: agentAddress as Address,
@@ -314,17 +359,25 @@ app.post("/register", async (req, res) => {
       network,
     });
 
+    const duration = Date.now() - startTime;
+    console.log(`⏱️ [POST /register] Registration call completed in ${duration}ms`);
+
     if (result.success && result.agentId) {
-      // For v1, store agentAddress -> agentId mapping
-      if (x402Version === 1 && agentAddress) {
+      console.log(`✅ [POST /register] Registration successful:`);
+      console.log(`   agentId: ${result.agentId}`);
+      console.log(`   txHash: ${result.txHash}`);
+
+      // Store agentAddress -> agentId mapping
+      if (agentAddress) {
         await agentAddressStore.set(agentAddress.toLowerCase(), result.agentId);
         console.log(
-          `📝 Stored v1 agentAddress (${agentAddress}) -> agentId (${result.agentId}) mapping`,
+          `📝 [POST /register] Stored agentAddress (${agentAddress}) -> agentId (${result.agentId}) mapping`,
         );
       }
 
       res.json(result);
     } else {
+      console.log(`❌ [POST /register] Registration failed: ${result.error}`);
       res.status(400).json(result);
     }
   } catch (error) {
@@ -390,6 +443,122 @@ app.get("/agent", async (req, res) => {
   }
 });
 
+/**
+ * GET /reputation
+ * Get reputation summary for an agent
+ * Note: Always uses Ethereum Sepolia for ERC-8004 registry
+ */
+app.get("/reputation", async (req, res) => {
+  try {
+    const { agentId, network = "eip155:11155111" } = req.query;
+
+    if (!agentId) {
+      return res.status(400).json({
+        success: false,
+        error: "agentId parameter is required",
+      });
+    }
+
+    const summary = await getReputationSummary(agentId as string, network as string);
+
+    if (!summary) {
+      return res.status(404).json({
+        success: false,
+        error: "Could not fetch reputation summary",
+      });
+    }
+
+    res.json({
+      success: true,
+      agentId,
+      count: summary.count.toString(),
+      summaryValue: summary.summaryValue.toString(),
+      summaryValueDecimals: summary.summaryValueDecimals,
+      averageScore: summary.averageScore,
+    });
+  } catch (error) {
+    console.error("Reputation error:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+});
+
+/**
+ * POST /feedback
+ * Submit feedback for an agent
+ * Note: Always uses Ethereum Sepolia for ERC-8004 registry
+ */
+app.post("/feedback", async (req, res) => {
+  try {
+    const {
+      agentId,
+      score,
+      tag1,
+      tag2,
+      endpoint,
+      feedbackURI,
+      feedbackHash,
+      network = "eip155:11155111",
+    } = req.body;
+
+    if (!agentId) {
+      return res.status(400).json({
+        success: false,
+        error: "agentId is required",
+      });
+    }
+
+    if (score === undefined || score === null) {
+      return res.status(400).json({
+        success: false,
+        error: "score is required",
+      });
+    }
+
+    if (score < 0 || score > 100) {
+      return res.status(400).json({
+        success: false,
+        error: "score must be between 0 and 100",
+      });
+    }
+
+    const result = await giveFeedback({
+      agentId,
+      score,
+      tag1,
+      tag2,
+      endpoint,
+      feedbackURI,
+      feedbackHash,
+      network,
+    });
+
+    if (result.success) {
+      feedbackCounter.inc({ network, status: "success" });
+      res.json({
+        success: true,
+        agentId,
+        txHash: result.txHash,
+      });
+    } else {
+      feedbackCounter.inc({ network, status: "failure" });
+      res.status(400).json({
+        success: false,
+        error: result.error,
+      });
+    }
+  } catch (error) {
+    feedbackCounter.inc({ network: req.body?.network || "unknown", status: "error" });
+    console.error("Feedback error:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+});
+
 // ============================================================================
 // Server Startup
 // ============================================================================
@@ -397,10 +566,14 @@ app.get("/agent", async (req, res) => {
 app.listen(parseInt(PORT), () => {
   console.log(`
 ╔════════════════════════════════════════════════════════╗
-║           x402 TypeScript Facilitator                  ║
+║           x402 ERC-8004 Facilitator                    ║
 ╠════════════════════════════════════════════════════════╣
-║  Network:    eip155:84532, eip155:8453                 ║
-║  Extensions: erc-8004                                  ║
+║  x402 Payment Networks:                                ║
+║  • eip155:84532 (Base Sepolia)                         ║
+║  • eip155:8453  (Base Mainnet)                         ║
+║                                                        ║
+║  ERC-8004 Registry Network:                            ║
+║  • eip155:11155111 (Ethereum Sepolia)                  ║
 ║                                                        ║
 ║  Endpoints:                                            ║
 ║  • POST /verify              (verify payment)          ║
@@ -408,6 +581,8 @@ app.listen(parseInt(PORT), () => {
 ║  • GET  /supported           (get supported kinds)     ║
 ║  • POST /register            (register agent)          ║
 ║  • GET  /agent               (get agent by address)    ║
+║  • GET  /reputation          (get reputation summary)  ║
+║  • POST /feedback            (submit feedback)         ║
 ╚════════════════════════════════════════════════════════╝
   `);
 

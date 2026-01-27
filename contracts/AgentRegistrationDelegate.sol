@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.20;
 
-import "../lib/openzeppelin-contracts/contracts/token/ERC721/IERC721Receiver.sol";
+import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 
 /**
  * @title AgentRegistrationDelegate
- * @dev Delegation contract for EIP-7702 agent registration
+ * @dev Delegation contract for EIP-7702 agent registration on Ethereum Sepolia
  * When an EOA delegates to this contract, it can call register() on IdentityRegistry
  * and msg.sender will be the EOA, not this contract
+ *
+ * Updated for new ERC-8004 contract ABIs:
+ * - MetadataEntry uses metadataKey/metadataValue instead of key/value
+ * - giveFeedback uses int128 value + uint8 valueDecimals instead of uint8 score
  */
 
 interface IFiatTokenV2 {
@@ -18,23 +22,46 @@ interface IFiatTokenV2 {
         uint256 validAfter,
         uint256 validBefore,
         bytes32 nonce,
-        bytes memory signature) external;
+        bytes memory signature
+    ) external;
 }
 
 interface IIdentityRegistry {
+    // Updated struct: field names changed to metadataKey/metadataValue
     struct MetadataEntry {
-        string key;
-        bytes value;
+        string metadataKey;
+        bytes metadataValue;
     }
 
     function register() external returns (uint256 agentId);
-    function register(string memory tokenUri) external returns (uint256 agentId);
-    function register(string memory tokenUri, MetadataEntry[] memory metadata) external returns (uint256 agentId);
+    function register(string memory agentURI) external returns (uint256 agentId);
+    function register(string memory agentURI, MetadataEntry[] memory metadata) external returns (uint256 agentId);
 }
 
 interface IReputationRegistry {
-    function giveFeedback(uint256 agentId, uint8 score, bytes32 tag1, bytes32 tag2, string calldata fileuri, bytes32 filehash, bytes memory feedbackAuth) external;
-    function getIdentityRegistry() external view returns (address);
+    // Updated: uses int128 value with uint8 valueDecimals instead of uint8 score
+    function giveFeedback(
+        uint256 agentId,
+        int128 value,
+        uint8 valueDecimals,
+        string calldata tag1,
+        string calldata tag2,
+        string calldata endpoint,
+        string calldata feedbackURI,
+        bytes32 feedbackHash
+    ) external;
+}
+
+// Struct to avoid stack too deep - updated for new contract ABI
+struct FeedbackParams {
+    uint256 agentId;
+    int128 value;
+    uint8 valueDecimals;
+    string tag1;
+    string tag2;
+    string endpoint;
+    string feedbackURI;
+    bytes32 feedbackHash;
 }
 
 contract AgentRegistrationDelegate {
@@ -96,8 +123,19 @@ contract AgentRegistrationDelegate {
         return IERC721Receiver.onERC721Received.selector;
     }
 
-    function giveFeedback(address registry, uint256 agentId, uint8 score, bytes32 tag1, bytes32 tag2, string calldata fileuri, bytes32 filehash, bytes memory feedbackAuth) external {
-        IReputationRegistry(registry).giveFeedback(agentId, score, tag1, tag2, fileuri, filehash, feedbackAuth);
+    // Updated for new contract ABI: uses int128 value with uint8 valueDecimals
+    // Using struct to avoid stack too deep error
+    function giveFeedback(address registry, FeedbackParams calldata params) external {
+        IReputationRegistry(registry).giveFeedback(
+            params.agentId,
+            params.value,
+            params.valueDecimals,
+            params.tag1,
+            params.tag2,
+            params.endpoint,
+            params.feedbackURI,
+            params.feedbackHash
+        );
     }
 
     function executeFiatTokenV2TransferWithAuthorization(

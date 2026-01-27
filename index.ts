@@ -65,18 +65,18 @@ const agentAddressStore = createRedisStore<string>(REDIS_URL);
 // Extension Setup
 // ============================================================================
 facilitator.registerExtension("erc-8004").onAfterSettle(async context => {
-  const endTimer = settlementDuration.startTimer();
   const network = context.paymentPayload.accepted?.network || "unknown";
 
-  try {
-    await register(context);
-    settlementCounter.inc({ network, status: "success" });
-  } catch (error) {
-    settlementCounter.inc({ network, status: "error" });
-    console.error("Extension error:", error);
-  } finally {
-    endTimer({ network });
-  }
+  // Fire-and-forget: Don't block settlement response while waiting for registration
+  // Registration happens on Ethereum Sepolia and can take 12-15+ seconds
+  register(context)
+    .then(() => {
+      settlementCounter.inc({ network, status: "success" });
+    })
+    .catch(error => {
+      settlementCounter.inc({ network, status: "error" });
+      console.error("Background registration error:", error);
+    });
 });
 
 const register = async (context: FacilitatorSettleResultContext) => {

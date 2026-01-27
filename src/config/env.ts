@@ -13,7 +13,7 @@ export const RPC_URL = process.env.RPC_URL as string;
 
 // Ethereum Sepolia RPC (for ERC-8004 registry operations)
 export const ETH_SEPOLIA_RPC_URL =
-  process.env.ETH_SEPOLIA_RPC_URL || "https://sepolia.etherscan.io";
+  process.env.ETH_SEPOLIA_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com";
 
 // ERC-8004 Contract Addresses (Ethereum Sepolia)
 // Identity Registry: 0x8004A818BFB912233c491871b3d84c89A494BD9e

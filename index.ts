@@ -550,7 +550,7 @@ app.post("/feedback", async (req, res) => {
       });
     }
   } catch (error) {
-    feedbackCounter.inc({ network: "unknown", status: "error" });
+    feedbackCounter.inc({ network: req.body?.network || "unknown", status: "error" });
     console.error("Feedback error:", error);
     res.status(500).json({
       success: false,

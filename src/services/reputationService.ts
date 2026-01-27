@@ -129,9 +129,10 @@ export async function getReputationSummary(
 
     const [count, summaryValue, summaryValueDecimals] = result;
 
-    // Calculate average considering decimals
+    // Calculate average: summaryValue is the sum of all feedback values (adjusted by decimals)
+    // averageScore = (summaryValue / 10^decimals) / count
     const divisor = 10 ** summaryValueDecimals;
-    const averageScore = count > 0n ? Number(summaryValue) / divisor / Number(count) : 0;
+    const averageScore = count > 0n ? Number(summaryValue) / (divisor * Number(count)) : 0;
 
     return {
       count,

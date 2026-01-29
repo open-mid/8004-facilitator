@@ -30,6 +30,9 @@ export const REDIS_URL = process.env.REDIS_URL;
 
 export const FACILITATOR_PRIVATE_KEY = normalizePrivateKey(process.env.FACILITATOR_PRIVATE_KEY);
 
+// IPFS (Pinata) for auto-register feature
+export const PINATA_JWT = process.env.PINATA_JWT;
+
 if (!FACILITATOR_PRIVATE_KEY) {
   console.error("❌ FACILITATOR_PRIVATE_KEY environment variable is required");
   process.exit(1);

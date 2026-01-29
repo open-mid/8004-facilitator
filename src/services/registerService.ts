@@ -60,7 +60,11 @@ export async function registerAgent(info: RegisterInfo): Promise<RegisterResult>
     const publicClient = createPublicClient({ chain, transport: http(ETH_SEPOLIA_RPC_URL) });
 
     const account = privateKeyToAccount(FACILITATOR_PRIVATE_KEY as `0x${string}`);
-    const walletClient = createWalletClient({ account, chain, transport: http(ETH_SEPOLIA_RPC_URL) });
+    const walletClient = createWalletClient({
+      account,
+      chain,
+      transport: http(ETH_SEPOLIA_RPC_URL),
+    });
 
     // Prepare metadata entries if provided
     // Note: New contract uses metadataKey/metadataValue instead of key/value
@@ -90,7 +94,9 @@ export async function registerAgent(info: RegisterInfo): Promise<RegisterResult>
     console.log(`   - Delegate Address: ${authorization.address}`);
     console.log(`   - ChainId: ${authorization.chainId} (type: ${typeof authorization.chainId})`);
     console.log(`   - Nonce: ${authorization.nonce} (type: ${typeof authorization.nonce})`);
-    console.log(`   - yParity: ${(authorization as any).yParity} (type: ${typeof (authorization as any).yParity})`);
+    console.log(
+      `   - yParity: ${(authorization as any).yParity} (type: ${typeof (authorization as any).yParity})`,
+    );
     console.log(`   - r: ${(authorization as any).r?.slice(0, 20)}...`);
     console.log(`   - s: ${(authorization as any).s?.slice(0, 20)}...`);
     console.log(`   - Agent Address: ${agentAddress}`);
@@ -99,7 +105,9 @@ export async function registerAgent(info: RegisterInfo): Promise<RegisterResult>
     const onChainNonce = await publicClient.getTransactionCount({ address: agentAddress });
     console.log(`   - On-chain nonce for agent: ${onChainNonce}`);
     if (onChainNonce !== authorization.nonce) {
-      console.warn(`⚠️ Nonce mismatch! Auth nonce: ${authorization.nonce}, On-chain: ${onChainNonce}`);
+      console.warn(
+        `⚠️ Nonce mismatch! Auth nonce: ${authorization.nonce}, On-chain: ${onChainNonce}`,
+      );
     }
 
     // Execute EIP-7702 transaction with authorization list
@@ -140,7 +148,9 @@ export async function registerAgent(info: RegisterInfo): Promise<RegisterResult>
     // Log all events for debugging
     for (let i = 0; i < receipt.logs.length; i++) {
       const log = receipt.logs[i];
-      console.log(`   Log ${i}: address=${log.address}, topics[0]=${log.topics[0]?.slice(0, 18)}...`);
+      console.log(
+        `   Log ${i}: address=${log.address}, topics[0]=${log.topics[0]?.slice(0, 18)}...`,
+      );
     }
 
     const registeredEvent = receipt.logs.find(log => {
@@ -171,7 +181,10 @@ export async function registerAgent(info: RegisterInfo): Promise<RegisterResult>
         });
         if (decoded.eventName === "Registered") {
           console.log("✅ Registered event decoded:", decoded);
-          console.log("   args:", JSON.stringify(decoded.args, (_, v) => typeof v === 'bigint' ? v.toString() : v));
+          console.log(
+            "   args:",
+            JSON.stringify(decoded.args, (_, v) => (typeof v === "bigint" ? v.toString() : v)),
+          );
           agentId = (decoded.args as any).agentId?.toString();
         }
       } catch (err) {
@@ -189,7 +202,10 @@ export async function registerAgent(info: RegisterInfo): Promise<RegisterResult>
             topics: log.topics,
           });
           // Look for Transfer from zero address (mint)
-          return decoded.eventName === "Transfer" && (decoded.args as any).from === "0x0000000000000000000000000000000000000000";
+          return (
+            decoded.eventName === "Transfer" &&
+            (decoded.args as any).from === "0x0000000000000000000000000000000000000000"
+          );
         } catch {
           return false;
         }

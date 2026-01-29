@@ -55,4 +55,3 @@ export function mapX402NetworkToChain(network?: string, rpcUrl?: string): Chain 
       return undefined;
   }
 }
-

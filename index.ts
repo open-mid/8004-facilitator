@@ -20,6 +20,7 @@ import { createFacilitatorSigners } from "./src/utils/signers";
 import { registerAgent } from "./src/services/registerService";
 import { giveFeedback, getReputationSummary } from "./src/services/reputationService";
 import { createRedisStore } from "./src/services/redisStore";
+import { autoGenerateTokenURI } from "./src/services/autoRegisterService";
 
 // Import metrics
 import {
@@ -93,6 +94,7 @@ const register = async (context: FacilitatorSettleResultContext) => {
         registerAuth?: Authorization;
         tokenURI?: string;
         metadata?: { key: string; value: string }[];
+        endpointUrl?: string; // Optional hint for auto-register
       }
     | undefined;
 
@@ -128,6 +130,24 @@ const register = async (context: FacilitatorSettleResultContext) => {
   console.log(`   address: ${(registerAuth as any).address}`);
   console.log(`   nonce: ${(registerAuth as any).nonce}`);
 
+  // Auto-generate tokenURI if not provided
+  let tokenURI = registeryInfo.tokenURI;
+  if (!tokenURI) {
+    console.log(`🤖 [register] No tokenURI provided, attempting auto-generate...`);
+    const autoResult = await autoGenerateTokenURI({
+      payToAddress: agentAddress,
+      endpointUrl: registeryInfo.endpointUrl,
+    });
+    if (autoResult.success && autoResult.tokenURI) {
+      tokenURI = autoResult.tokenURI;
+      console.log(`✅ [register] Auto-generated tokenURI: ${tokenURI}`);
+    } else {
+      console.log(
+        `⚠️ [register] Auto-generate failed: ${autoResult.error}, proceeding without tokenURI`,
+      );
+    }
+  }
+
   try {
     // viem's Authorization type expects chainId and nonce as number, not BigInt
     const deserializedAuthorization = {
@@ -145,7 +165,7 @@ const register = async (context: FacilitatorSettleResultContext) => {
     const result = await registerAgent({
       agentAddress: agentAddress as Address,
       authorization: deserializedAuthorization,
-      tokenURI: registeryInfo.tokenURI,
+      tokenURI,
       metadata: registeryInfo.metadata,
       network: paymentPayload.accepted?.network,
     });
@@ -296,21 +316,32 @@ app.get("/metrics", async (req, res) => {
  * POST /register
  * Register a new agent with ERC-8004
  * Note: Always uses Ethereum Sepolia for ERC-8004 registry
+ *
+ * If tokenURI is not provided, the facilitator will attempt to:
+ * 1. Fetch endpoint info from Bazaar using agentAddress or endpointUrl
+ * 2. Generate ERC-8004 metadata from Bazaar info
+ * 3. Upload to IPFS and use the resulting URL as tokenURI
  */
 app.post("/register", async (req, res) => {
   try {
     const {
-      tokenURI,
+      tokenURI: providedTokenURI,
       metadata,
       network = "eip155:11155111",
       x402Version = 1,
       agentAddress,
       authorization,
+      // Optional fields for auto-register
+      endpointUrl,
+      name,
+      description,
+      imageUrl,
     } = req.body;
 
     console.log(`🔍 [POST /register] Received registration request`);
     console.log(`   agentAddress: ${agentAddress}`);
-    console.log(`   tokenURI: ${tokenURI || "(none)"}`);
+    console.log(`   tokenURI: ${providedTokenURI || "(none - will auto-generate)"}`);
+    console.log(`   endpointUrl: ${endpointUrl || "(none)"}`);
     console.log(`   metadata entries: ${metadata?.length || 0}`);
     console.log(`   network: ${network}`);
     console.log(`   x402Version: ${x402Version}`);
@@ -337,6 +368,30 @@ app.post("/register", async (req, res) => {
     console.log(`   chainId: ${(authorization as any).chainId}`);
     console.log(`   address: ${(authorization as any).address}`);
     console.log(`   nonce: ${(authorization as any).nonce}`);
+
+    // Auto-generate tokenURI if not provided
+    let tokenURI = providedTokenURI;
+    let autoRegisterResult = null;
+
+    if (!tokenURI) {
+      console.log(`🤖 [POST /register] No tokenURI provided, attempting auto-generate...`);
+      autoRegisterResult = await autoGenerateTokenURI({
+        payToAddress: agentAddress,
+        endpointUrl,
+        name,
+        description,
+        imageUrl,
+      });
+
+      if (autoRegisterResult.success && autoRegisterResult.tokenURI) {
+        tokenURI = autoRegisterResult.tokenURI;
+        console.log(`✅ [POST /register] Auto-generated tokenURI: ${tokenURI}`);
+        console.log(`   Metadata source: ${autoRegisterResult.source}`);
+      } else {
+        console.log(`⚠️ [POST /register] Auto-generate failed: ${autoRegisterResult.error}`);
+        // Continue without tokenURI - registration will still work, just without metadata
+      }
+    }
 
     // viem's Authorization type expects chainId and nonce as number, not BigInt
     const deserializedAuthorization = {
@@ -375,7 +430,18 @@ app.post("/register", async (req, res) => {
         );
       }
 
-      res.json(result);
+      // Include auto-register info in response if applicable
+      const response = {
+        ...result,
+        ...(autoRegisterResult?.success && {
+          autoGenerated: {
+            tokenURI: autoRegisterResult.tokenURI,
+            metadataSource: autoRegisterResult.source,
+          },
+        }),
+      };
+
+      res.json(response);
     } else {
       console.log(`❌ [POST /register] Registration failed: ${result.error}`);
       res.status(400).json(result);

@@ -18,8 +18,7 @@ export const ETH_SEPOLIA_RPC_URL =
 // ERC-8004 Contract Addresses (Ethereum Sepolia)
 // Identity Registry: 0x8004A818BFB912233c491871b3d84c89A494BD9e
 // Reputation Registry: 0x8004B663056A597Dffe9eCcC1965A193B7388713
-export const ERC8004_IDENTITY_REGISTRY_ADDRESS = (process.env
-  .ERC8004_IDENTITY_REGISTRY_ADDRESS ||
+export const ERC8004_IDENTITY_REGISTRY_ADDRESS = (process.env.ERC8004_IDENTITY_REGISTRY_ADDRESS ||
   "0x8004A818BFB912233c491871b3d84c89A494BD9e") as `0x${string}`;
 export const ERC8004_REPUTATION_REGISTRY_ADDRESS = (process.env
   .ERC8004_REPUTATION_REGISTRY_ADDRESS ||
@@ -29,6 +28,15 @@ export const PORT = process.env.PORT || "4022";
 export const REDIS_URL = process.env.REDIS_URL;
 
 export const FACILITATOR_PRIVATE_KEY = normalizePrivateKey(process.env.FACILITATOR_PRIVATE_KEY);
+
+// Auto-register configuration
+// PINATA_JWT: JWT token for uploading metadata to IPFS via Pinata
+// Get your JWT from: https://app.pinata.cloud/developers/api-keys
+export const PINATA_JWT = process.env.PINATA_JWT;
+
+// BAZAAR_URL: Base URL for the Bazaar discovery API
+// Used to fetch endpoint info for auto-generating ERC-8004 metadata
+export const BAZAAR_URL = process.env.BAZAAR_URL || "https://bazaar.openmid.xyz";
 
 if (!FACILITATOR_PRIVATE_KEY) {
   console.error("❌ FACILITATOR_PRIVATE_KEY environment variable is required");
@@ -50,3 +58,7 @@ console.log(`   Identity Registry: ${ERC8004_IDENTITY_REGISTRY_ADDRESS}`);
 console.log(`   Reputation Registry: ${ERC8004_REPUTATION_REGISTRY_ADDRESS}`);
 console.log(`   Delegate Contract: ${DELEGATE_CONTRACT_ADDRESS}`);
 console.log(`   Ethereum Sepolia RPC: ${ETH_SEPOLIA_RPC_URL}`);
+console.log(
+  `   Auto-register enabled: ${PINATA_JWT ? "✅ Yes (IPFS via Pinata)" : "❌ No (missing PINATA_JWT)"}`,
+);
+console.log(`   Bazaar URL: ${BAZAAR_URL}`);

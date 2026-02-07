@@ -7,7 +7,8 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
-  ETH_SEPOLIA_RPC_URL,
+  ERC8004_NETWORK,
+  ERC8004_RPC_URL,
   ERC8004_REPUTATION_REGISTRY_ADDRESS,
   FACILITATOR_PRIVATE_KEY,
 } from "../config/env";
@@ -40,7 +41,7 @@ export type ReputationSummary = {
 
 /**
  * Submit feedback for an agent to the Reputation Registry
- * Uses Ethereum Sepolia - new contract with int128 value and valueDecimals
+ * Uses configured ERC-8004 registry network.
  */
 export async function giveFeedback(params: GiveFeedbackParams): Promise<FeedbackResult> {
   const {
@@ -54,9 +55,8 @@ export async function giveFeedback(params: GiveFeedbackParams): Promise<Feedback
     network,
   } = params;
 
-  // Force Ethereum Sepolia for reputation registry
-  const registryNetwork = "eip155:11155111";
-  const chain = mapX402NetworkToChain(registryNetwork, ETH_SEPOLIA_RPC_URL);
+  const registryNetwork = network || ERC8004_NETWORK;
+  const chain = mapX402NetworkToChain(registryNetwork, ERC8004_RPC_URL);
   if (!chain) {
     return { success: false, error: `Unsupported network: ${registryNetwork}` };
   }
@@ -68,8 +68,8 @@ export async function giveFeedback(params: GiveFeedbackParams): Promise<Feedback
 
   try {
     const account = privateKeyToAccount(FACILITATOR_PRIVATE_KEY as `0x${string}`);
-    const walletClient = createWalletClient({ account, chain, transport: http(ETH_SEPOLIA_RPC_URL) });
-    const publicClient = createPublicClient({ chain, transport: http(ETH_SEPOLIA_RPC_URL) });
+    const walletClient = createWalletClient({ account, chain, transport: http(ERC8004_RPC_URL) });
+    const publicClient = createPublicClient({ chain, transport: http(ERC8004_RPC_URL) });
 
     // Convert score (0-100) to new contract format: int128 value with uint8 valueDecimals
     // score: 85 -> value: 85n, valueDecimals: 0
@@ -101,21 +101,20 @@ export async function giveFeedback(params: GiveFeedbackParams): Promise<Feedback
 
 /**
  * Get reputation summary for an agent
- * Uses Ethereum Sepolia - new contract with filtering parameters
+ * Uses configured ERC-8004 registry network.
  */
 export async function getReputationSummary(
   agentId: string,
   network: string,
 ): Promise<ReputationSummary | null> {
-  // Force Ethereum Sepolia for reputation registry
-  const registryNetwork = "eip155:11155111";
-  const chain = mapX402NetworkToChain(registryNetwork, ETH_SEPOLIA_RPC_URL);
+  const registryNetwork = network || ERC8004_NETWORK;
+  const chain = mapX402NetworkToChain(registryNetwork, ERC8004_RPC_URL);
   if (!chain) {
     console.error(`Unsupported network: ${registryNetwork}`);
     return null;
   }
 
-  const publicClient = createPublicClient({ chain, transport: http(ETH_SEPOLIA_RPC_URL) });
+  const publicClient = createPublicClient({ chain, transport: http(ERC8004_RPC_URL) });
 
   try {
     // New contract signature: getSummary(agentId, clientAddresses[], tag1, tag2)
@@ -155,12 +154,11 @@ export async function getLastFeedbackIndex(
   clientAddress: Address,
   network: string,
 ): Promise<number | null> {
-  // Force Ethereum Sepolia for reputation registry
-  const registryNetwork = "eip155:11155111";
-  const chain = mapX402NetworkToChain(registryNetwork, ETH_SEPOLIA_RPC_URL);
+  const registryNetwork = network || ERC8004_NETWORK;
+  const chain = mapX402NetworkToChain(registryNetwork, ERC8004_RPC_URL);
   if (!chain) return null;
 
-  const publicClient = createPublicClient({ chain, transport: http(ETH_SEPOLIA_RPC_URL) });
+  const publicClient = createPublicClient({ chain, transport: http(ERC8004_RPC_URL) });
 
   try {
     const lastIndex = (await publicClient.readContract({
@@ -182,12 +180,11 @@ export async function getLastFeedbackIndex(
  * Uses Ethereum Sepolia
  */
 export async function getClients(agentId: string, network: string): Promise<Address[] | null> {
-  // Force Ethereum Sepolia for reputation registry
-  const registryNetwork = "eip155:11155111";
-  const chain = mapX402NetworkToChain(registryNetwork, ETH_SEPOLIA_RPC_URL);
+  const registryNetwork = network || ERC8004_NETWORK;
+  const chain = mapX402NetworkToChain(registryNetwork, ERC8004_RPC_URL);
   if (!chain) return null;
 
-  const publicClient = createPublicClient({ chain, transport: http(ETH_SEPOLIA_RPC_URL) });
+  const publicClient = createPublicClient({ chain, transport: http(ERC8004_RPC_URL) });
 
   try {
     const clients = (await publicClient.readContract({

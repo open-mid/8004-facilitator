@@ -9,7 +9,8 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
-  ETH_SEPOLIA_RPC_URL,
+  ERC8004_NETWORK,
+  ERC8004_RPC_URL,
   ERC8004_IDENTITY_REGISTRY_ADDRESS,
   DELEGATE_CONTRACT_ADDRESS,
   FACILITATOR_PRIVATE_KEY,
@@ -36,7 +37,10 @@ export type RegisterResult = {
 
 export async function registerAgent(info: RegisterInfo): Promise<RegisterResult> {
   const { tokenURI, metadata, agentAddress, authorization } = info;
-  const network = "eip155:11155111"; // force registration to Ethereum Sepolia
+
+  // Default registry network is configured via env (ERC8004_NETWORK).
+  // The optional info.network is treated as the desired ERC-8004 registry network.
+  const network = info.network || ERC8004_NETWORK;
 
   if (!network) {
     console.log("Registration failed: missing network");
@@ -46,7 +50,7 @@ export async function registerAgent(info: RegisterInfo): Promise<RegisterResult>
     };
   }
 
-  const chain = mapX402NetworkToChain(network, ETH_SEPOLIA_RPC_URL);
+  const chain = mapX402NetworkToChain(network, ERC8004_RPC_URL);
   if (!chain) {
     console.log("Registration failed: unsupported network:", network);
     return {
@@ -57,10 +61,10 @@ export async function registerAgent(info: RegisterInfo): Promise<RegisterResult>
   }
 
   try {
-    const publicClient = createPublicClient({ chain, transport: http(ETH_SEPOLIA_RPC_URL) });
+    const publicClient = createPublicClient({ chain, transport: http(ERC8004_RPC_URL) });
 
     const account = privateKeyToAccount(FACILITATOR_PRIVATE_KEY as `0x${string}`);
-    const walletClient = createWalletClient({ account, chain, transport: http(ETH_SEPOLIA_RPC_URL) });
+    const walletClient = createWalletClient({ account, chain, transport: http(ERC8004_RPC_URL) });
 
     // Prepare metadata entries if provided
     // Note: New contract uses metadataKey/metadataValue instead of key/value

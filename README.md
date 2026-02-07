@@ -3,11 +3,15 @@
 A facilitator acts as the service access point for x402 payments: verifying user requests, settling payments on-chain. This implementation extends that flow with ERC-8004 identity and feedback primitives, enabling fully onchain agent registration and authenticated service evaluation.
 
 **Payment Network**: Base Mainnet, Base Sepolia
-**ERC-8004 Registry Network**: Ethereum Sepolia
+**ERC-8004 Registry Network**: Configurable (default: Ethereum Sepolia)
 **Facilitator URL**: https://facilitator.openmid.xyz
 **Documentation**: https://www.openmid.xyz/docs
 
-### Contract Addresses (Ethereum Sepolia)
+### ERC-8004 Contract Addresses
+
+Defaults come from the official ERC-8004 contracts repo: https://github.com/erc-8004/erc-8004-contracts
+
+#### Ethereum Sepolia / Base Sepolia
 
 | Contract | Address |
 |----------|---------|
@@ -15,10 +19,17 @@ A facilitator acts as the service access point for x402 payments: verifying user
 | Reputation Registry | `0x8004B663056A597Dffe9eCcC1965A193B7388713` |
 | Delegation Contract | `0x252367B463f77EFe33c151E9d9821788090EC4b5` |
 
+#### Ethereum Mainnet / Base Mainnet
+
+| Contract | Address |
+|----------|---------|
+| Identity Registry | `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` |
+| Reputation Registry | `0x8004BAa17C55a88189AE136b182e5fdA19dE9b63` |
+
 ## Features
 
 - **Payment Processing**: Verify and settle payments for both x402 v1 and v2 (Base Sepolia / Base Mainnet)
-- **ERC-8004 Integration**: Agent registration via EIP-7702 delegation (Ethereum Sepolia)
+- **ERC-8004 Integration**: Agent registration via EIP-7702 delegation (configurable registry network)
 - **Feedback System**: Enables agent signing feedback auth within the x402 payment flow
 
 ### ERC-8004 Registration with x402 V2 extension
@@ -52,7 +63,7 @@ app.use(
 
 Simply by passing "erc-8004" key and the 7702 auth, the facilitator can register the agent automatically to the 8004 registry. For full example, please see `examples/v2-server`.
 
-**Note**: The `registerAuth` must be signed for Ethereum Sepolia (chainId: 11155111), while x402 payments are processed on Base networks.
+**Note**: The `registerAuth` must be signed for the configured ERC-8004 registry network (see `ERC8004_NETWORK`), while x402 payments are processed on Base networks.
 
 ## Quick Start
 
@@ -78,10 +89,12 @@ FACILITATOR_PRIVATE_KEY=0x...
 # x402 Payment Network (Base Sepolia)
 RPC_URL=https://sepolia.base.org
 
-# ERC-8004 Registry Network (Ethereum Sepolia)
-ETH_SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
-ERC8004_IDENTITY_REGISTRY_ADDRESS=0x8004A818BFB912233c491871b3d84c89A494BD9e
-ERC8004_REPUTATION_REGISTRY_ADDRESS=0x8004B663056A597Dffe9eCcC1965A193B7388713
+# ERC-8004 Registry Network (defaults to Ethereum Sepolia)
+ERC8004_NETWORK=eip155:11155111
+ERC8004_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+# Optional overrides (defaults depend on ERC8004_NETWORK)
+# ERC8004_IDENTITY_REGISTRY_ADDRESS=0x...
+# ERC8004_REPUTATION_REGISTRY_ADDRESS=0x...
 DELEGATE_CONTRACT_ADDRESS=0x252367B463f77EFe33c151E9d9821788090EC4b5
 ```
 

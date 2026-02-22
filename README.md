@@ -11,7 +11,7 @@ A facilitator acts as the service access point for x402 payments: verifying user
 
 Defaults come from the official ERC-8004 contracts repo: https://github.com/erc-8004/erc-8004-contracts
 
-#### Ethereum Sepolia / Base Sepolia
+#### Ethereum Sepolia
 
 | Contract | Address |
 |----------|---------|
@@ -19,12 +19,13 @@ Defaults come from the official ERC-8004 contracts repo: https://github.com/erc-
 | Reputation Registry | `0x8004B663056A597Dffe9eCcC1965A193B7388713` |
 | Delegation Contract | `0x252367B463f77EFe33c151E9d9821788090EC4b5` |
 
-#### Ethereum Mainnet / Base Mainnet
+#### Base Mainnet
 
 | Contract | Address |
 |----------|---------|
 | Identity Registry | `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` |
 | Reputation Registry | `0x8004BAa17C55a88189AE136b182e5fdA19dE9b63` |
+| Delegation Contract | `0x097f9491a25c1D5087298db04B11c9A461dD0661` |
 
 ## Features
 

@@ -3,7 +3,7 @@
 A facilitator acts as the service access point for x402 payments: verifying user requests, settling payments on-chain. This implementation extends that flow with ERC-8004 identity and feedback primitives, enabling fully onchain agent registration and authenticated service evaluation.
 
 **Payment Network**: Base Mainnet, Base Sepolia
-**ERC-8004 Registry Network**: Configurable (default: Ethereum Sepolia)
+**ERC-8004 Registry Network**: Configurable (default: Base Mainnet)
 **Facilitator URL**: https://facilitator.openmid.xyz
 **Documentation**: https://www.openmid.xyz/docs
 
@@ -64,7 +64,7 @@ app.use(
 
 Simply by passing "erc-8004" key and the 7702 auth, the facilitator can register the agent automatically to the 8004 registry. For full example, please see `examples/v2-server`.
 
-**Note**: The `registerAuth` must be signed for the configured ERC-8004 registry network (see `ERC8004_NETWORK`), while x402 payments are processed on Base networks.
+**Note**: The `registerAuth` must be signed for the ERC-8004 registry chain (defaults to Base Mainnet, chainId 8453), while x402 payments are processed on Base networks.
 
 ## Quick Start
 
@@ -87,16 +87,19 @@ Create a `.env` file with the following variables:
 # Required
 FACILITATOR_PRIVATE_KEY=0x...
 
-# x402 Payment Network (Base Sepolia)
-RPC_URL=https://sepolia.base.org
+# x402 Payment Network
+RPC_URL=https://mainnet.base.org
 
-# ERC-8004 Registry Network (defaults to Ethereum Sepolia)
-ERC8004_NETWORK=eip155:11155111
-ERC8004_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
-# Optional overrides (defaults depend on ERC8004_NETWORK)
+# ERC-8004 Registry Network (defaults to Base Mainnet)
+# Override per-chain RPC if needed:
+# ERC8004_RPC_URL_8453=https://mainnet-preconf.base.org
+# ERC8004_RPC_URL_11155111=https://ethereum-sepolia-rpc.publicnode.com
+
+# Optional address overrides (built-in defaults for Base Mainnet and Ethereum Sepolia)
 # ERC8004_IDENTITY_REGISTRY_ADDRESS=0x...
 # ERC8004_REPUTATION_REGISTRY_ADDRESS=0x...
-DELEGATE_CONTRACT_ADDRESS=0x252367B463f77EFe33c151E9d9821788090EC4b5
+# DELEGATE_CONTRACT_ADDRESS_8453=0x...
+# DELEGATE_CONTRACT_ADDRESS_11155111=0x...
 ```
 
 ### Run

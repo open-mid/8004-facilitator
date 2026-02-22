@@ -301,7 +301,7 @@ app.post("/register", async (req, res) => {
     const {
       tokenURI,
       metadata,
-      network = ERC8004_NETWORK,
+      network,
       x402Version = 1,
       agentAddress,
       authorization,
@@ -449,7 +449,7 @@ app.get("/agent", async (req, res) => {
  */
 app.get("/reputation", async (req, res) => {
   try {
-    const { agentId, network = ERC8004_NETWORK } = req.query;
+    const { agentId, network = "eip155:8453" } = req.query;
 
     if (!agentId) {
       return res.status(400).json({
@@ -499,7 +499,7 @@ app.post("/feedback", async (req, res) => {
       endpoint,
       feedbackURI,
       feedbackHash,
-      network = ERC8004_NETWORK,
+      network = "eip155:8453",
     } = req.body;
 
     if (!agentId) {

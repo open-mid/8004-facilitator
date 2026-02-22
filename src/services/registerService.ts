@@ -9,10 +9,10 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
-  ERC8004_NETWORK,
-  ERC8004_RPC_URL,
   ERC8004_IDENTITY_REGISTRY_ADDRESS,
-  DELEGATE_CONTRACT_ADDRESS,
+  getDelegateContractAddress,
+  getErc8004RpcUrl,
+  getDefaultErc8004IdentityRegistry,
   FACILITATOR_PRIVATE_KEY,
 } from "../config/env";
 import { identityRegistryAbi, delegateContractAbi } from "../config/contracts";
@@ -38,19 +38,13 @@ export type RegisterResult = {
 export async function registerAgent(info: RegisterInfo): Promise<RegisterResult> {
   const { tokenURI, metadata, agentAddress, authorization } = info;
 
-  // Default registry network is configured via env (ERC8004_NETWORK).
-  // The optional info.network is treated as the desired ERC-8004 registry network.
-  const network = info.network || ERC8004_NETWORK;
+  // Derive the registry network from the authorization's chainId.
+  // The authorization chainId tells us which chain the agent wants to register on.
+  const chainId = authorization.chainId;
+  const network = info.network || `eip155:${chainId}`;
+  const rpcUrl = getErc8004RpcUrl(chainId);
 
-  if (!network) {
-    console.log("Registration failed: missing network");
-    return {
-      success: false,
-      error: "Missing required field: network",
-    };
-  }
-
-  const chain = mapX402NetworkToChain(network, ERC8004_RPC_URL);
+  const chain = mapX402NetworkToChain(network, rpcUrl);
   if (!chain) {
     console.log("Registration failed: unsupported network:", network);
     return {
@@ -60,11 +54,15 @@ export async function registerAgent(info: RegisterInfo): Promise<RegisterResult>
     };
   }
 
+  // Use per-chain identity registry address, falling back to the configured override.
+  const identityRegistryAddress =
+    ERC8004_IDENTITY_REGISTRY_ADDRESS || getDefaultErc8004IdentityRegistry(chainId);
+
   try {
-    const publicClient = createPublicClient({ chain, transport: http(ERC8004_RPC_URL) });
+    const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
 
     const account = privateKeyToAccount(FACILITATOR_PRIVATE_KEY as `0x${string}`);
-    const walletClient = createWalletClient({ account, chain, transport: http(ERC8004_RPC_URL) });
+    const walletClient = createWalletClient({ account, chain, transport: http(rpcUrl) });
 
     // Prepare metadata entries if provided
     // Note: New contract uses metadataKey/metadataValue instead of key/value
@@ -78,15 +76,21 @@ export async function registerAgent(info: RegisterInfo): Promise<RegisterResult>
       }));
     }
 
-    // Verify authorization matches delegate contract
-    const delegateAddress = DELEGATE_CONTRACT_ADDRESS;
+    // Verify authorization matches the delegate contract for the authorization's chainId
+    const delegateAddress = getDelegateContractAddress(authorization.chainId);
+    if (!delegateAddress) {
+      return {
+        success: false,
+        error: `No delegate contract configured for chainId ${authorization.chainId}`,
+      };
+    }
     if (authorization.address.toLowerCase() !== delegateAddress.toLowerCase()) {
       console.error(
         `❌ Authorization address mismatch! Expected: ${delegateAddress}, Got: ${authorization.address}`,
       );
       return {
         success: false,
-        error: `Authorization address (${authorization.address}) does not match delegate contract address (${delegateAddress})`,
+        error: `Authorization address (${authorization.address}) does not match delegate contract address (${delegateAddress}) for chainId ${authorization.chainId}`,
       };
     }
 
@@ -114,19 +118,19 @@ export async function registerAgent(info: RegisterInfo): Promise<RegisterResult>
       data = encodeFunctionData({
         abi: delegateContractAbi,
         functionName: "register",
-        args: [ERC8004_IDENTITY_REGISTRY_ADDRESS, tokenURI || "", metadataEntries],
+        args: [identityRegistryAddress, tokenURI || "", metadataEntries],
       });
     } else if (tokenURI) {
       data = encodeFunctionData({
         abi: delegateContractAbi,
         functionName: "register",
-        args: [ERC8004_IDENTITY_REGISTRY_ADDRESS, tokenURI],
+        args: [identityRegistryAddress, tokenURI],
       });
     } else {
       data = encodeFunctionData({
         abi: delegateContractAbi,
         functionName: "register",
-        args: [ERC8004_IDENTITY_REGISTRY_ADDRESS],
+        args: [identityRegistryAddress],
       });
     }
 
@@ -158,7 +162,7 @@ export async function registerAgent(info: RegisterInfo): Promise<RegisterResult>
         return decoded.eventName === "Registered";
       } catch (err) {
         // Only log if this looks like it might be the Registered event (from IdentityRegistry)
-        if (log.address.toLowerCase() === ERC8004_IDENTITY_REGISTRY_ADDRESS.toLowerCase()) {
+        if (log.address.toLowerCase() === identityRegistryAddress.toLowerCase()) {
           console.log(`   Failed to decode log from IdentityRegistry: ${err}`);
         }
         return false;

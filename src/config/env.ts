@@ -40,6 +40,10 @@ function getChainIdFromNetwork(network: string): number | undefined {
   return Number.isFinite(chainId) ? chainId : undefined;
 }
 
+export function getDefaultErc8004IdentityRegistry(chainId: number): `0x${string}` {
+  return getDefaultErc8004Addresses(`eip155:${chainId}`).identityRegistry;
+}
+
 function getDefaultErc8004Addresses(network: string): {
   identityRegistry: `0x${string}`;
   reputationRegistry: `0x${string}`;
@@ -83,6 +87,21 @@ export const ERC8004_RPC_URL =
   process.env.ETH_SEPOLIA_RPC_URL ||
   "https://ethereum-sepolia-rpc.publicnode.com";
 
+// Per-chain RPC URLs for ERC-8004 registry operations.
+// Falls back to ERC8004_RPC_URL if not set.
+const ERC8004_RPC_URL_DEFAULTS: Record<number, string> = {
+  11155111: "https://ethereum-sepolia-rpc.publicnode.com",
+  8453: "https://mainnet.base.org",
+};
+
+export function getErc8004RpcUrl(chainId: number): string {
+  return (
+    process.env[`ERC8004_RPC_URL_${chainId}`] ||
+    ERC8004_RPC_URL_DEFAULTS[chainId] ||
+    ERC8004_RPC_URL
+  );
+}
+
 // Back-compat export (older code paths / docs)
 export const ETH_SEPOLIA_RPC_URL = process.env.ETH_SEPOLIA_RPC_URL || ERC8004_RPC_URL;
 
@@ -93,7 +112,24 @@ export const ERC8004_IDENTITY_REGISTRY_ADDRESS = (process.env.ERC8004_IDENTITY_R
   default8004.identityRegistry) as `0x${string}`;
 export const ERC8004_REPUTATION_REGISTRY_ADDRESS = (process.env.ERC8004_REPUTATION_REGISTRY_ADDRESS ||
   default8004.reputationRegistry) as `0x${string}`;
-export const DELEGATE_CONTRACT_ADDRESS = process.env.DELEGATE_CONTRACT_ADDRESS as `0x${string}`;
+// Delegate contract addresses per chain.
+// Built-in defaults for known chains; override with DELEGATE_CONTRACT_ADDRESS_<CHAIN_ID>
+// or fall back to DELEGATE_CONTRACT_ADDRESS for single-chain setups.
+const DELEGATE_CONTRACT_DEFAULTS: Record<number, `0x${string}`> = {
+  11155111: "0x252367B463f77EFe33c151E9d9821788090EC4b5", // Ethereum Sepolia
+  8453: "0x097f9491a25c1D5087298db04B11c9A461dD0661",     // Base Mainnet
+};
+
+const DELEGATE_CONTRACT_ADDRESS_FALLBACK = process.env.DELEGATE_CONTRACT_ADDRESS as `0x${string}` | undefined;
+
+export function getDelegateContractAddress(chainId: number): `0x${string}` | undefined {
+  const envOverride = process.env[`DELEGATE_CONTRACT_ADDRESS_${chainId}`] as `0x${string}` | undefined;
+  return envOverride || DELEGATE_CONTRACT_DEFAULTS[chainId] || DELEGATE_CONTRACT_ADDRESS_FALLBACK;
+}
+
+// Back-compat: single address (used for startup validation log)
+export const DELEGATE_CONTRACT_ADDRESS = DELEGATE_CONTRACT_ADDRESS_FALLBACK || DELEGATE_CONTRACT_DEFAULTS[8453];
+
 export const PORT = process.env.PORT || "4022";
 export const REDIS_URL = process.env.REDIS_URL;
 
@@ -109,14 +145,13 @@ if (!RPC_URL) {
   process.exit(1);
 }
 
-if (!DELEGATE_CONTRACT_ADDRESS) {
-  console.error("❌ DELEGATE_CONTRACT_ADDRESS environment variable is required");
-  process.exit(1);
-}
-
 console.log("📋 ERC-8004 Configuration:");
 console.log(`   Network: ${ERC8004_NETWORK}`);
 console.log(`   Identity Registry: ${ERC8004_IDENTITY_REGISTRY_ADDRESS}`);
 console.log(`   Reputation Registry: ${ERC8004_REPUTATION_REGISTRY_ADDRESS}`);
-console.log(`   Delegate Contract: ${DELEGATE_CONTRACT_ADDRESS}`);
+console.log(`   Delegate Contracts:`);
+Object.entries(DELEGATE_CONTRACT_DEFAULTS).forEach(([chainId, addr]) => {
+  const override = process.env[`DELEGATE_CONTRACT_ADDRESS_${chainId}`];
+  console.log(`     chainId ${chainId}: ${override || addr}${override ? " (override)" : ""}`);
+});
 console.log(`   RPC URL: ${ERC8004_RPC_URL}`);

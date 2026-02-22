@@ -11,7 +11,7 @@ import { ExactEvmSchemeV1 as ExactEvmSchemeV1Facilitator } from "@x402/evm/exact
 import type { Address, Authorization } from "viem";
 
 // Import config
-import { PORT, FACILITATOR_PRIVATE_KEY, REDIS_URL, ERC8004_NETWORK } from "./src/config/env";
+import { PORT, FACILITATOR_PRIVATE_KEY, REDIS_URL } from "./src/config/env";
 
 // Import utils
 import { createFacilitatorSigners } from "./src/utils/signers";
@@ -147,7 +147,6 @@ const register = async (context: FacilitatorSettleResultContext) => {
       authorization: deserializedAuthorization,
       tokenURI: registeryInfo.tokenURI,
       metadata: registeryInfo.metadata,
-      network: ERC8004_NETWORK,
     });
 
     const duration = Date.now() - startTime;
@@ -572,8 +571,9 @@ app.listen(parseInt(PORT), () => {
 ║  • eip155:84532 (Base Sepolia)                         ║
 ║  • eip155:8453  (Base Mainnet)                         ║
 ║                                                        ║
-║  ERC-8004 Registry Network:                            ║
-║  • ${ERC8004_NETWORK.padEnd(44, " ") }║
+║  ERC-8004 Registry Networks:                           ║
+║  • eip155:11155111 (Ethereum Sepolia)                  ║
+║  • eip155:8453     (Base Mainnet)                      ║
 ║                                                        ║
 ║  Endpoints:                                            ║
 ║  • POST /verify              (verify payment)          ║

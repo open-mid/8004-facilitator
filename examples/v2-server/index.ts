@@ -8,7 +8,7 @@ import { paymentMiddleware } from "@x402/express";
 import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
 import { registerExactEvmScheme } from "@x402/evm/exact/server";
 import { createWalletClient, http, type Address, type Authorization } from "viem";
-import { baseSepolia } from "viem/chains";
+import { base } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import type { Hex } from "viem";
 
@@ -64,7 +64,7 @@ async function generateSerializedRegistrationAuthorization(
 
   const walletClient = createWalletClient({
     account: agentAccount,
-    chain: baseSepolia,
+    chain: base,
     transport: http(),
   });
 
@@ -100,7 +100,7 @@ registerExactEvmScheme(service);
 const registerAuth = await generateSerializedRegistrationAuthorization(
   delegateContractAddress as Address,
   agentPrivateKey,
-  84532,
+  8453,
 );
 
 // Configure payment middleware
@@ -211,8 +211,8 @@ app.post("/register-agent", async (req, res) => {
     const {
       tokenURI,
       metadata,
-      network = "base-sepolia",
-      chainId = 84532, // Base Sepolia chain ID
+      network = "eip155:8453",
+      chainId = 8453, // Base Mainnet chain ID
     } = req.body;
 
     // Validate required environment variables

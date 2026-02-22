@@ -6,7 +6,7 @@ import { config } from "dotenv";
 import express from "express";
 import { paymentMiddleware, Resource, type SolanaAddress } from "x402-express";
 import { createWalletClient, http, type Address, type Authorization } from "viem";
-import { baseSepolia } from "viem/chains";
+import { base } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 
 config();
@@ -46,7 +46,7 @@ async function generateRegistrationAuthorization(
 
   const walletClient = createWalletClient({
     account: agentAccount,
-    chain: baseSepolia,
+    chain: base,
     transport: http(),
   });
 
@@ -74,7 +74,7 @@ app.use(
       "GET /resource": {
         // USDC amount in dollars
         price: "$0.001",
-        network: "base-sepolia",
+        network: "base",
       },
     },
     {
@@ -104,8 +104,8 @@ app.get("/resource", (req, res) => {
  * {
  *   tokenURI?: string,
  *   metadata?: Array<{key: string, value: string}>,
- *   network?: string (default: "base-sepolia"),
- *   chainId?: number (default: 84532 for Base Sepolia)
+ *   network?: string (default: "eip155:8453"),
+ *   chainId?: number (default: 8453 for Base Mainnet)
  * }
  */
 app.post("/register-agent", async (req, res) => {
@@ -113,8 +113,8 @@ app.post("/register-agent", async (req, res) => {
     const {
       tokenURI,
       metadata,
-      network = "base-sepolia",
-      chainId = 84532, // Base Sepolia chain ID
+      network = "eip155:8453",
+      chainId = 8453, // Base Mainnet chain ID
     } = req.body;
 
     // Validate required environment variables

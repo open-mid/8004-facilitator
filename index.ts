@@ -68,7 +68,7 @@ facilitator.registerExtension("erc-8004").onAfterSettle(async context => {
   const network = context.paymentPayload.accepted?.network || "unknown";
 
   // Fire-and-forget: Don't block settlement response while waiting for registration
-  // Registration happens on Ethereum Sepolia and can take 12-15+ seconds
+  // Registration happens on the configured ERC-8004 registry network and can take 12-15+ seconds
   register(context)
     .then(() => {
       settlementCounter.inc({ network, status: "success" });
@@ -147,7 +147,6 @@ const register = async (context: FacilitatorSettleResultContext) => {
       authorization: deserializedAuthorization,
       tokenURI: registeryInfo.tokenURI,
       metadata: registeryInfo.metadata,
-      network: paymentPayload.accepted?.network,
     });
 
     const duration = Date.now() - startTime;
@@ -295,14 +294,14 @@ app.get("/metrics", async (req, res) => {
 /**
  * POST /register
  * Register a new agent with ERC-8004
- * Note: Always uses Ethereum Sepolia for ERC-8004 registry
+ * Note: Uses the configured ERC-8004 registry network
  */
 app.post("/register", async (req, res) => {
   try {
     const {
       tokenURI,
       metadata,
-      network = "eip155:11155111",
+      network = ERC8004_NETWORK,
       x402Version = 1,
       agentAddress,
       authorization,
@@ -446,11 +445,11 @@ app.get("/agent", async (req, res) => {
 /**
  * GET /reputation
  * Get reputation summary for an agent
- * Note: Always uses Ethereum Sepolia for ERC-8004 registry
+ * Note: Uses the configured ERC-8004 registry network
  */
 app.get("/reputation", async (req, res) => {
   try {
-    const { agentId, network = "eip155:11155111" } = req.query;
+    const { agentId, network = ERC8004_NETWORK } = req.query;
 
     if (!agentId) {
       return res.status(400).json({
@@ -488,7 +487,7 @@ app.get("/reputation", async (req, res) => {
 /**
  * POST /feedback
  * Submit feedback for an agent
- * Note: Always uses Ethereum Sepolia for ERC-8004 registry
+ * Note: Uses the configured ERC-8004 registry network
  */
 app.post("/feedback", async (req, res) => {
   try {
@@ -500,7 +499,7 @@ app.post("/feedback", async (req, res) => {
       endpoint,
       feedbackURI,
       feedbackHash,
-      network = "eip155:11155111",
+      network = ERC8004_NETWORK,
     } = req.body;
 
     if (!agentId) {
@@ -572,8 +571,9 @@ app.listen(parseInt(PORT), () => {
 ║  • eip155:84532 (Base Sepolia)                         ║
 ║  • eip155:8453  (Base Mainnet)                         ║
 ║                                                        ║
-║  ERC-8004 Registry Network:                            ║
+║  ERC-8004 Registry Networks:                           ║
 ║  • eip155:11155111 (Ethereum Sepolia)                  ║
+║  • eip155:8453     (Base Mainnet)                      ║
 ║                                                        ║
 ║  Endpoints:                                            ║
 ║  • POST /verify              (verify payment)          ║

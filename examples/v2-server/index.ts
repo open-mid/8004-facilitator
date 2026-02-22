@@ -8,7 +8,7 @@ import { paymentMiddleware } from "@x402/express";
 import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
 import { registerExactEvmScheme } from "@x402/evm/exact/server";
 import { createWalletClient, http, type Address, type Authorization } from "viem";
-import { baseSepolia } from "viem/chains";
+import { base } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import type { Hex } from "viem";
 
@@ -64,7 +64,7 @@ async function generateSerializedRegistrationAuthorization(
 
   const walletClient = createWalletClient({
     account: agentAccount,
-    chain: baseSepolia,
+    chain: base,
     transport: http(),
   });
 
@@ -100,7 +100,7 @@ registerExactEvmScheme(service);
 const registerAuth = await generateSerializedRegistrationAuthorization(
   delegateContractAddress as Address,
   agentPrivateKey,
-  84532,
+  8453,
 );
 
 // Configure payment middleware
@@ -202,8 +202,8 @@ app.post("/signFeedbackAuth", async (req, res) => {
  * {
  *   tokenURI?: string,
  *   metadata?: Array<{key: string, value: string}>,
- *   network?: string (default: "base-sepolia"),
- *   chainId?: number (default: 84532 for Base Sepolia)
+ *   network?: string (default: "eip155:8453"),
+ *   chainId?: number (default: 8453 for Base Mainnet)
  * }
  */
 app.post("/register-agent", async (req, res) => {
@@ -211,8 +211,8 @@ app.post("/register-agent", async (req, res) => {
     const {
       tokenURI,
       metadata,
-      network = "base-sepolia",
-      chainId = 84532, // Base Sepolia chain ID
+      network = "eip155:8453",
+      chainId = 8453, // Base Mainnet chain ID
     } = req.body;
 
     // Validate required environment variables
@@ -242,23 +242,13 @@ app.post("/register-agent", async (req, res) => {
     console.log(`Generating EIP-7702 authorization for agent ${agentAddress}`);
 
     // Generate authorization - delegate to the delegate contract
-    const authorization = await generateRegistrationAuthorization(
+    const serializedAuthorization = await generateSerializedRegistrationAuthorization(
       delegateContractAddress as Address,
       normalizedPrivateKey,
       chainId,
     );
 
     console.log(`Authorization generated, calling facilitator /register endpoint`);
-
-    // Serialize authorization - convert BigInt values to strings for JSON
-    const serializedAuthorization = {
-      chainId: authorization.chainId.toString(),
-      address: authorization.address,
-      nonce: authorization.nonce.toString(),
-      yParity: authorization.yParity,
-      r: authorization.r,
-      s: authorization.s,
-    };
 
     // Call facilitator's /register endpoint
     const registerResponse = await fetch(`${facilitatorUrl}/register`, {

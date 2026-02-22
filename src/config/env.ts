@@ -78,20 +78,20 @@ function getDefaultErc8004Addresses(network: string): {
 // - Use CAIP-2 format: e.g. eip155:8453 (Base Mainnet)
 // - Back-compat: ETH_SEPOLIA_RPC_URL is still honored if ERC8004_RPC_URL is not set
 export const ERC8004_NETWORK = normalizeErc8004Network(
-  process.env.ERC8004_NETWORK || process.env.ERC8004_REGISTRY_NETWORK || "eip155:11155111",
+  process.env.ERC8004_NETWORK || process.env.ERC8004_REGISTRY_NETWORK || "eip155:8453",
 );
 
 export const ERC8004_RPC_URL =
   process.env.ERC8004_RPC_URL ||
   process.env.ERC8004_REGISTRY_RPC_URL ||
   process.env.ETH_SEPOLIA_RPC_URL ||
-  "https://ethereum-sepolia-rpc.publicnode.com";
+  "https://mainnet-preconf.base.org";
 
 // Per-chain RPC URLs for ERC-8004 registry operations.
 // Falls back to ERC8004_RPC_URL if not set.
 const ERC8004_RPC_URL_DEFAULTS: Record<number, string> = {
   11155111: "https://ethereum-sepolia-rpc.publicnode.com",
-  8453: "https://mainnet.base.org",
+  8453: "https://mainnet-preconf.base.org",
 };
 
 export function getErc8004RpcUrl(chainId: number): string {

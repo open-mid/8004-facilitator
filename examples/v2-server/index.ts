@@ -202,8 +202,8 @@ app.post("/signFeedbackAuth", async (req, res) => {
  * {
  *   tokenURI?: string,
  *   metadata?: Array<{key: string, value: string}>,
- *   network?: string (default: "base-sepolia"),
- *   chainId?: number (default: 84532 for Base Sepolia)
+ *   network?: string (default: "eip155:8453"),
+ *   chainId?: number (default: 8453 for Base Mainnet)
  * }
  */
 app.post("/register-agent", async (req, res) => {
@@ -242,23 +242,13 @@ app.post("/register-agent", async (req, res) => {
     console.log(`Generating EIP-7702 authorization for agent ${agentAddress}`);
 
     // Generate authorization - delegate to the delegate contract
-    const authorization = await generateRegistrationAuthorization(
+    const serializedAuthorization = await generateSerializedRegistrationAuthorization(
       delegateContractAddress as Address,
       normalizedPrivateKey,
       chainId,
     );
 
     console.log(`Authorization generated, calling facilitator /register endpoint`);
-
-    // Serialize authorization - convert BigInt values to strings for JSON
-    const serializedAuthorization = {
-      chainId: authorization.chainId.toString(),
-      address: authorization.address,
-      nonce: authorization.nonce.toString(),
-      yParity: authorization.yParity,
-      r: authorization.r,
-      s: authorization.s,
-    };
 
     // Call facilitator's /register endpoint
     const registerResponse = await fetch(`${facilitatorUrl}/register`, {

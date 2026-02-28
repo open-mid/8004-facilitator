@@ -20,6 +20,7 @@ import { createFacilitatorSigners } from "./src/utils/signers";
 import { registerAgent } from "./src/services/registerService";
 import { giveFeedback, getReputationSummary } from "./src/services/reputationService";
 import { createRedisStore } from "./src/services/redisStore";
+import { autoGenerateTokenURI, type BazaarDiscoveryExtension } from "./src/services/autoRegisterService";
 
 // Import metrics
 import {
@@ -128,6 +129,29 @@ const register = async (context: FacilitatorSettleResultContext) => {
   console.log(`   address: ${(registerAuth as any).address}`);
   console.log(`   nonce: ${(registerAuth as any).nonce}`);
 
+  // Auto-generate tokenURI if not provided
+  let tokenURI = registeryInfo.tokenURI;
+  if (!tokenURI) {
+    console.log(`🤖 [register] No tokenURI provided, attempting auto-generate...`);
+    
+    // Get bazaar discovery extension if present
+    const bazaarExtension = extensions?.["bazaar"] as BazaarDiscoveryExtension | undefined;
+    const resource = (context.requirements as any)?.resource;
+    
+    const autoResult = await autoGenerateTokenURI({
+      payToAddress: agentAddress,
+      resource,
+      bazaarExtension,
+    });
+    
+    if (autoResult.success && autoResult.tokenURI) {
+      tokenURI = autoResult.tokenURI;
+      console.log(`✅ [register] Auto-generated tokenURI: ${tokenURI} (source: ${autoResult.source})`);
+    } else {
+      console.log(`⚠️ [register] Auto-generate failed: ${autoResult.error}, proceeding without tokenURI`);
+    }
+  }
+
   try {
     // viem's Authorization type expects chainId and nonce as number, not BigInt
     const deserializedAuthorization = {
@@ -145,7 +169,7 @@ const register = async (context: FacilitatorSettleResultContext) => {
     const result = await registerAgent({
       agentAddress: agentAddress as Address,
       authorization: deserializedAuthorization,
-      tokenURI: registeryInfo.tokenURI,
+      tokenURI,
       metadata: registeryInfo.metadata,
     });
 
